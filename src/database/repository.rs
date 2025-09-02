@@ -70,8 +70,6 @@ impl WorkflowExecutionRepository {
             guard.entry(execution.step_id).or_default().push(execution.clone());
         }
         if let Some(pool) = &self.pool {
-            // Asegura que las tablas básicas existan (defensa ante BD recién creada sin
-            // migraciones aplicadas).
             self.ensure_core_schema(pool).await?;
             // Calcular integrity_ok si no viene seteado (compara hash almacenado con hash recomputado de parámetros)
             let integrity_status = execution.integrity_ok.unwrap_or_else(|| {
@@ -196,7 +194,7 @@ impl WorkflowExecutionRepository {
         // 0004 molecules normalization
         sqlx::query("CREATE TABLE IF NOT EXISTS molecules ( inchikey TEXT PRIMARY KEY, inchi TEXT NOT NULL, smiles TEXT NOT NULL, common_name TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now() )").execute(pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_molecules ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, molecule_inchikey TEXT NOT NULL REFERENCES molecules(inchikey) ON DELETE CASCADE, position INT NOT NULL DEFAULT 0, PRIMARY KEY (family_id, molecule_inchikey) )").execute(pool).await?;
-        // Índices esenciales (idempotentes)
+        // Índices esenciales (idempotente)
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_status ON workflow_step_executions(status)").execute(pool).await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_start_time ON workflow_step_executions(start_time)").execute(pool).await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_family_properties_name ON molecule_family_properties(property_name)").execute(pool).await?;
