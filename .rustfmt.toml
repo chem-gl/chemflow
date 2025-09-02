@@ -1,0 +1,4 @@
+# .rustfmt.toml
+indent_style = "Visual"  # O "Block"
+wrap_comments = true
+max_width = 100
