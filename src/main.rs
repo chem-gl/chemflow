@@ -19,7 +19,7 @@ use config::{CONFIG, create_pool};
 use crate::providers::molecule::implementations::test_provider::TestMoleculeProvider;
 use crate::providers::properties::implementations::test_provider::TestPropertiesProvider;
 use crate::workflow::manager::WorkflowManager;
-use crate::workflow::step::{MoleculeAcquisitionStep, PropertiesCalculationStep};
+use crate::workflow::step::{MoleculeAcquisitionStep, PropertiesCalculationStep, DataAggregationStep, StepOutput};
 use crate::providers::data::trait_dataprovider::DataProvider;
 use serde_json::Value;
 use uuid::Uuid;
@@ -221,5 +221,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let dp = InlineCountProv;
     let _total = dp.calculate(&properties_output.families, &HashMap::new()).await?;
+
+    // ---------------------------------------------------------------------
+    // (15) Ejemplo ampliado: ejecución step-by-step con referencias para branching
+    // ---------------------------------------------------------------------
+    println!("\n=== Ejecución step-by-step con referencias y branching manual + auto ===");
+    manager.start_new_flow();
+    let mut recorded_step_ids: Vec<Uuid> = Vec::new();
+    // Step A: Acquire test molecules
+    let step_a = MoleculeAcquisitionStep { id: Uuid::new_v4(), name: "A:Acquire".into(), description: "Acquire base set".into(), provider_name: "test_molecule".into(), parameters: HashMap::from([("count".into(), Value::Number(3.into()))]) };
+    let out_a = manager.execute_step(&step_a, vec![], step_a.parameters.clone()).await?;
+    recorded_step_ids.push(out_a.execution_info.step_id);
+    println!("Step A complete -> step_id={} families={}", out_a.execution_info.step_id, out_a.families.len());
+
+    // Step B: Calculate LogP (first variant)
+    let step_b = PropertiesCalculationStep { id: Uuid::new_v4(), name: "B:LogP#1".into(), description: "LogP baseline".into(), provider_name: "test_properties".into(), property_name: "logp".into(), parameters: HashMap::from([("calculation_method".into(), Value::String("baseline".into()))]) };
+    let out_b = manager.execute_step(&step_b, out_a.families.clone(), step_b.parameters.clone()).await?;
+    recorded_step_ids.push(out_b.execution_info.step_id);
+    println!("Step B complete -> step_id={} prop_count={} branch_from={:?}", out_b.execution_info.step_id, out_b.families[0].get_property("logp").map(|p| p.values.len()).unwrap_or(0), out_b.execution_info.branch_from_step_id);
+
+    // Step C: Calculate LogP (second variant) - triggers auto-branch due to changed parameter hash
+    let mut params_c = HashMap::new(); params_c.insert("calculation_method".into(), Value::String("alt_model".into()));
+    let step_c = PropertiesCalculationStep { id: Uuid::new_v4(), name: "C:LogP#2".into(), description: "LogP alternative".into(), provider_name: "test_properties".into(), property_name: "logp".into(), parameters: params_c.clone() };
+    let out_c = manager.execute_step(&step_c, out_b.families.clone(), params_c).await?;
+    recorded_step_ids.push(out_c.execution_info.step_id);
+    println!("Step C complete -> auto-branch? branch_from={:?}", out_c.execution_info.branch_from_step_id);
+
+    // Manual branch from step B (using recorded reference) and then run another property calc with freeze
+    let branch_origin_id = recorded_step_ids[1]; // step B
+    manager.create_branch(branch_origin_id);
+    let mut params_d = HashMap::new();
+    params_d.insert("calculation_method".into(), Value::String("branch_variant".into()));
+    params_d.insert("freeze".into(), Value::Bool(true)); // congelar familia tras este step
+    let step_d = PropertiesCalculationStep { id: Uuid::new_v4(), name: "D:LogP#Branch".into(), description: "Branch logP variant (frozen)".into(), provider_name: "test_properties".into(), property_name: "logp".into(), parameters: params_d.clone() };
+    let out_d = manager.execute_step(&step_d, out_b.families.clone(), params_d).await?;
+    recorded_step_ids.push(out_d.execution_info.step_id);
+    println!("Step D (branch) complete -> branch_from={:?} frozen={} hash={:?}", out_d.execution_info.branch_from_step_id, out_d.families[0].frozen, out_d.families[0].family_hash);
+
+    // Aggregation over the latest (branched) family using DataAggregationStep to showcase multi-family stats (single here for demo)
+    let agg_step = DataAggregationStep { id: Uuid::new_v4(), name: "E:AggregateLogP".into(), description: "Aggregate LogP stats".into(), provider_name: "antiox_aggregate".into(), result_key: "logp_stats".into(), parameters: HashMap::new() };
+    // Use both main-line (out_c) and branch (out_d) families for aggregation
+    let mut agg_input_fams = out_c.families.clone();
+    agg_input_fams.extend(out_d.families.clone());
+    let agg_out = manager.execute_step(&agg_step, agg_input_fams, HashMap::from([("data_provider".into(), Value::String("antiox_aggregate".into()))])).await?;
+    println!("Aggregation step result keys: {:?}", agg_out.results.keys().collect::<Vec<_>>());
+
+    // ---------------------------------------------------------------------
+    // (16) Ejemplo de ejecución 'full run' (pipeline) en modo lote
+    // ---------------------------------------------------------------------
+    println!("\n=== Ejecución de pipeline completa (modo batch) ===");
+    manager.start_new_flow();
+    let p_acq = MoleculeAcquisitionStep { id: Uuid::new_v4(), name: "BatchAcquire".into(), description: "Batch acquire".into(), provider_name: "test_molecule".into(), parameters: HashMap::from([("count".into(), Value::Number(4.into()))]) };
+    let p_props = PropertiesCalculationStep { id: Uuid::new_v4(), name: "BatchLogP".into(), description: "Batch logp".into(), provider_name: "test_properties".into(), property_name: "logp".into(), parameters: HashMap::from([("calculation_method".into(), Value::String("batch".into()))]) };
+    let p_agg = DataAggregationStep { id: Uuid::new_v4(), name: "BatchAggregate".into(), description: "Batch aggregate".into(), provider_name: "antiox_aggregate".into(), result_key: "batch_stats".into(), parameters: HashMap::new() };
+
+    // Simple helper inline to run sequentially
+    async fn run_pipeline(manager: &mut WorkflowManager, steps: Vec<(&dyn crate::workflow::step::WorkflowStep, HashMap<String, Value>)>) -> Result<Vec<StepOutput>, Box<dyn std::error::Error>> {
+        let mut outputs = Vec::new();
+        let mut families: Vec<crate::data::family::MoleculeFamily> = Vec::new();
+        for (s, params) in steps {
+            let out = manager.execute_step(s, families, params.clone()).await?;
+            families = out.families.clone();
+            outputs.push(out);
+        }
+        Ok(outputs)
+    }
+    let pipeline_results = run_pipeline(&mut manager, vec![
+        (&p_acq as &dyn crate::workflow::step::WorkflowStep, p_acq.parameters.clone()),
+        (&p_props as &dyn crate::workflow::step::WorkflowStep, p_props.parameters.clone()),
+        (&p_agg as &dyn crate::workflow::step::WorkflowStep, HashMap::from([("data_provider".into(), Value::String("antiox_aggregate".into()))])),
+    ]).await?;
+    println!("Pipeline ejecutada en {} steps. Último tipo outputs={} results_keys={:?}", pipeline_results.len(), pipeline_results.last().unwrap().families.len(), pipeline_results.last().unwrap().results.keys().collect::<Vec<_>>() );
+
+    println!("Ejemplos avanzados completados.");
+    // (17) DSL estilo encadenado solicitado (step1 -> step2 -> step3, re-ejecutar step2 provoca branch)
+    println!("\n=== DSL simplificada (FlowSession) ===");
+    use crate::workflow::flowdsl::FlowSession;
+    let mut session = FlowSession::new(&mut manager);
+    let s1 = session.step1_acquire(4).await?; println!("DSL step1 id={s1}");
+    let s2 = session.step2_logp("baseline").await?; println!("DSL step2 baseline id={s2}");
+    // Re-ejecución con diferentes parámetros -> branch
+    let s2b = session.step2_logp("alt").await?; println!("DSL step2 alt (branch) id={s2b}");
+    let s3 = session.step3_aggregate().await?; println!("DSL step3 aggregate id={s3}");
+    println!("Familias resultantes en DSL: {}", session.current_families().len());
     Ok(())
 }
