@@ -1,3 +1,10 @@
+//! Punto de entrada de ChemFlow.
+//! Responsable de:
+//! 1. Cargar configuración (.env)
+//! 2. Ejecutar migraciones
+//! 3. Probar conexión a BD
+//! 4. Registrar proveedores de ejemplo
+//! 5. Ejecutar un flujo de demostración con branching y agregaciones
 mod data;
 mod molecule;
 mod workflow;
@@ -19,19 +26,20 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load .env if present
+    // (1) Cargar .env si existe
     if let Err(e) = dotenvy::dotenv() {
         eprintln!("Warning: could not load .env file ({e}) - relying on existing environment");
     }
     println!("Hello, ChemFlow! Running migrations...");
 
+    // (2) Migraciones
     if let Err(e) = migrations::run_migrations().await {
         eprintln!("Failed to run migrations: {e}");
         return Err(e);
     }
     println!("Migrations applied.");
 
-    // Test DB connection
+    // (3) Probar conexión BD
     println!("Intentando conectar a la base de datos...");
     println!("URL: {}", CONFIG.database.url);
     let pool = create_pool().await?;
@@ -43,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let repo = WorkflowExecutionRepository::with_pool(pool).await;
 
-    // Create base providers
+    // (4) Registrar proveedores base
     let mut molecule_providers = HashMap::new();
     molecule_providers.insert("test_molecule".to_string(), Box::new(TestMoleculeProvider::new()) as Box<dyn crate::providers::molecule::traitmolecule::MoleculeProvider>);
 
@@ -110,11 +118,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut data_providers: HashMap<String, Box<dyn DataProvider>> = HashMap::new();
     data_providers.insert("antiox_aggregate".into(), Box::new(AntioxAggregateProvider) as Box<dyn DataProvider>);
 
-    // Create manager and start a new flow (explicit call to exercise API)
+    // (5) Crear manager e iniciar nuevo flujo
     let mut manager = WorkflowManager::new(repo, molecule_providers, properties_providers, data_providers);
     let _root_id = manager.start_new_flow();
 
-    // Create steps
+    // (6) Definir steps de ejemplo
     let acquisition_step = MoleculeAcquisitionStep {
         id: Uuid::new_v4(),
         name: "Acquire Test Molecules".to_string(),
@@ -136,13 +144,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]),
     };
 
-    // Execute acquisition step
+    // (7) Ejecutar step de adquisición
     let acquisition_output = manager.execute_step(&acquisition_step, Vec::new(), acquisition_step.parameters.clone()).await?;
     println!("Acquired {} molecules", acquisition_output.families[0].molecules.len());
 
-    // Branch example (no-op branch just to exercise API)
+    // (8) Crear rama (branch) desde el step de adquisición
     let _branch_root = manager.create_branch(acquisition_step.id);
-    // Execute properties step
+    // (9) Ejecutar step de cálculo de propiedades
     let properties_output = manager.execute_step(&properties_step, acquisition_output.families, properties_step.parameters.clone()).await?;
     println!("Calculated properties for {} molecules", properties_output.families[0].molecules.len());
 
@@ -151,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "0.1.0".to_string(),
     );
 
-    // Antioxidant mini-flow
+    // (10) Mini flujo antioxidante
     let antiox_seed_step = MoleculeAcquisitionStep { id: Uuid::new_v4(), name: "Acquire Antiox Seeds".into(), description: "Obtiene moléculas antioxidantes de referencia".into(), provider_name: "antiox_seed".into(), parameters: HashMap::new() };
     let antiox_acq = manager.execute_step(&antiox_seed_step, vec![], HashMap::new()).await?;
     println!("Antiox seeds: {}", antiox_acq.families[0].molecules.len());
@@ -160,17 +168,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let antiox_scored = manager.execute_step(&antiox_prop_step, antiox_acq.families.clone(), HashMap::new()).await?;
     if let Some(prop) = antiox_scored.families[0].get_property("radical_scavenging_score") { println!("Scores registrados: {}", prop.values.len()); }
 
-    // Demonstrate branching: branch from scoring step id and (re)score (mock) with same provider to simulate alternative path
+    // (11) Branching desde step de scoring
     let branch_root = manager.create_branch(antiox_prop_step.id);
     let _ = branch_root; // silence unused
     let branch_step = PropertiesCalculationStep { id: Uuid::new_v4(), name: "Branch Alt Score".into(), description: "Alternative scoring branch".into(), provider_name: "antiox_activity".into(), property_name: "radical_scavenging_score".into(), parameters: HashMap::new() };
     let _branch_out = manager.execute_step(&branch_step, antiox_scored.families.clone(), HashMap::new()).await?;
 
-    // Fetch executions by root id to verify persistence in memory
+    // (12) Obtener ejecuciones por root para validar trazabilidad
     let executions = manager.repository().get_steps_by_root(manager.root_execution_id()).await;
     println!("Total step executions for root {}: {}", manager.root_execution_id(), executions.len());
 
-    // Exercise repository API to avoid dead code (mock diagnostics)
+    // (13) Ejercitar API del repositorio para diagnóstico / evitar código muerto
     if let Some(first) = executions.first() {
         // get_execution & get_step_execution
         let _all_for_first = manager.repository().get_execution(first.step_id).await;
@@ -185,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Explicit call to new() to silence potential dead code if signature changes
     let _dummy_repo = crate::database::repository::WorkflowExecutionRepository::new(true);
 
-    // Runtime usage of parameter type enums to avoid dead_code warnings
+    // (14) Uso en runtime de enums de parámetros (evitar dead_code)
     use crate::providers::molecule::traitmolecule::ParameterType as MolParamType;
     use crate::providers::properties::trait_properties::ParameterType as PropParamType;
     use crate::providers::data::trait_dataprovider::{DataParameterType, DataParameterDefinition};

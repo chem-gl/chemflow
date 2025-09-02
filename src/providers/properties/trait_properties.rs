@@ -1,3 +1,8 @@
+//! Trait y tipos para proveedores de propiedades químicas.
+//! Proporciona el contrato para calcular propiedades sobre familias completas,
+//! devolviendo vectores de datos (ej. LogP) con información temporal y de fuente.
+//! La trazabilidad se logra registrando proveedor, versión y parámetros en cada
+//! `FamilyProperty` cuando el step correspondiente invoca al provider.
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;

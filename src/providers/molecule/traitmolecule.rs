@@ -1,3 +1,8 @@
+//! Trait que define el contrato para proveedores de moléculas.
+//! Un `MoleculeProvider` genera una `MoleculeFamily` inicial a partir de
+//! parámetros (por ejemplo leyendo de una base de datos, archivo, API externa
+//! o generando moléculas sintéticas). Los parámetros y metadatos se registrarán
+//! en el step que invoque al proveedor para trazabilidad y branching.
 use async_trait::async_trait;
 use std::collections::HashMap;
 use serde_json::Value;
@@ -11,6 +16,9 @@ pub trait MoleculeProvider: Send + Sync {
     fn get_description(&self) -> &str;
     fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition>;
     
+    /// Construye una nueva familia de moléculas usando los parámetros
+    /// (ya validados externamente). Debe devolver una familia autocontenida
+    /// con `source_provider` apropiado agregado posteriormente por el step.
     async fn get_molecule_family(
         &self,
         parameters: &HashMap<String, Value>,

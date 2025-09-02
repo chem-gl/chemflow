@@ -1,10 +1,18 @@
+//! Entidad básica `Molecule` que representa una molécula individual.
+//! Contiene identificadores químicos comunes (InChIKey / SMILES / InChI) y
+//! opcionalmente un nombre común. Este módulo es deliberadamente mínimo para
+//! permitir ampliaciones futuras (anotaciones, índices, subestructuras, etc.).
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Molecule {
+    /// InChIKey único empleado como clave primaria lógica.
     pub inchikey: String,  // Clave primaria
+    /// Representación SMILES.
     pub smiles: String,
+    /// Cadena InChI (puede ser derivada de la estructura real en futuras versiones).
     pub inchi: String,
+    /// Nombre común opcional.
     pub common_name: Option<String>,
 }
 
@@ -18,11 +26,9 @@ impl Molecule {
         }
     }
     
-    /// .
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if the SMILES string is invalid.
+    /// Construye una molécula a partir de una cadena SMILES.
+    /// (Placeholder: la validación real química se debe implementar más adelante).
+    /// Retorna error sólo si la validación futura lo requiere.
     pub fn from_smiles(smiles: String) -> Result<Self, Box<dyn std::error::Error>> {
         let inchikey = format!("{}_key", smiles);  // Placeholder
         let inchi = format!("InChI=1S/{}", smiles);  // Placeholder

@@ -1,3 +1,9 @@
+//! Trait para proveedores de datos agregados / analíticos.
+//! Un `DataProvider` no necesariamente añade propiedades a las familias, sino
+//! que produce un resultado JSON (estadísticas, agregaciones, métricas) basado
+//! en una o múltiples `MoleculeFamily` de entrada. Su resultado puede ser
+//! almacenado como parte de `StepOutput.results` conservando parámetros usados
+//! para reproducibilidad.
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -11,8 +17,9 @@ pub trait DataProvider: Send + Sync {
     fn get_description(&self) -> &str;
     fn get_available_parameters(&self) -> HashMap<String, DataParameterDefinition>;
 
-    /// Calculates (aggregated) data over one or many families. Returns a JSON value so
-    /// providers can shape their own schema. Must embed enough structure for traceability.
+    /// Calcula datos (agregados) sobre una o varias familias. Devuelve un `Value` JSON para
+    /// permitir esquemas flexibles. El JSON debería contener suficiente estructura para
+    /// mantener trazabilidad (ej. listas de IDs, versión de algoritmo, etc.).
     async fn calculate(
         &self,
         families: &[MoleculeFamily],

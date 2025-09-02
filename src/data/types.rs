@@ -1,10 +1,18 @@
+//! Tipos de datos moleculares genéricos y estructuras concretas utilizadas
+//! para asociar valores cuantitativos con trazabilidad (fuente, timestamp,
+//! estado de congelación). El trait `MolecularData` define una interfaz común
+//! para diferentes tipos de datos (LogP, toxicidad, etc.).
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 pub trait MolecularData: Serialize + DeserializeOwned + Send + Sync {
+    /// Tipo nativo subyacente (ej: f64 para datos numéricos continuos).
     type NativeType;
     
+    /// Obtiene el valor principal.
     fn get_value(&self) -> &Self::NativeType;
+    /// Fuente / método / proveedor que originó el dato.
     fn get_source(&self) -> &str;
+    /// Indica si el dato está "congelado" (inmutable para reproducibilidad / branching).
     fn is_frozen(&self) -> bool;
 }
 

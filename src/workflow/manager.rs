@@ -1,3 +1,10 @@
+//! Orquestador principal del workflow.
+//! Se encarga de:
+//! - Mantener el contexto de ejecución raíz (root_execution_id).
+//! - Registrar el encadenamiento de steps (parent_step_id) y origen de bifurcaciones (branch_from_step_id).
+//! - Ejecutar steps aplicando inmutabilidad lógica y persistiendo metadatos en el repositorio.
+//! - Persistir familias y su relación con cada ejecución de step para trazabilidad.
+//! - Exponer métodos para iniciar nuevos flujos y crear ramas.
 use std::collections::HashMap;
 
 use crate::database::repository::WorkflowExecutionRepository;
@@ -12,8 +19,11 @@ pub struct WorkflowManager {
     molecule_providers: HashMap<String, Box<dyn MoleculeProvider>>,
     properties_providers: HashMap<String, Box<dyn PropertiesProvider>>,
     data_providers: HashMap<String, Box<dyn DataProvider>>,
+    /// Identificador de la raíz del flujo actual (constante a lo largo de la línea principal y sus ramas derivadas).
     current_root_execution_id: uuid::Uuid,
+    /// Último step ejecutado (para encadenar parent_step_id en el siguiente).
     last_step_id: Option<uuid::Uuid>,
+    /// Step desde el cual se originó la rama vigente (None si estamos en la línea principal sin branch activo).
     branch_origin: Option<uuid::Uuid>,
 }
 
@@ -35,11 +45,16 @@ impl WorkflowManager {
         }
     }
 
+    /// Devuelve el identificador raíz del flujo actual.
     pub fn root_execution_id(&self) -> uuid::Uuid { self.current_root_execution_id }
+    /// Devuelve el último step ejecutado (para encadenamiento lineal).
     pub fn last_step_id(&self) -> Option<uuid::Uuid> { self.last_step_id }
+    /// Acceso al repositorio de persistencia (ejecuciones + familias).
     pub fn repository(&self) -> &WorkflowExecutionRepository { &self.execution_repo }
 
-    /// Starts a new independent workflow root execution context.
+    /// Inicia un nuevo flujo independiente, generando un nuevo root_execution_id
+    /// y reseteando la cadena de parent/branch. Útil cuando el usuario desea
+    /// comenzar una ejecución completamente separada.
     pub fn start_new_flow(&mut self) -> uuid::Uuid {
         self.current_root_execution_id = uuid::Uuid::new_v4();
         self.last_step_id = None;
@@ -47,7 +62,9 @@ impl WorkflowManager {
         self.current_root_execution_id
     }
 
-    /// Creates a branch from a given previous step id: resets parent pointer but keeps root id.
+    /// Crea una rama a partir de un step previo: conserva el root_execution_id (para agrupar
+    /// todas las ejecuciones relacionadas) pero marca branch_origin para que los steps posteriores
+    /// anoten en su metadata de ejecución desde qué punto divergen.
     pub fn create_branch(&mut self, from_step_id: uuid::Uuid) -> uuid::Uuid {
     // Keep same root, mark branch origin so subsequent executions record it
     self.last_step_id = Some(from_step_id);
@@ -61,12 +78,15 @@ impl WorkflowManager {
         input_families: Vec<MoleculeFamily>,
         step_parameters: HashMap<String, serde_json::Value>,
     ) -> Result<StepOutput, Box<dyn std::error::Error>> {
+    // 1. Construir StepInput (familias + parámetros específicos de esta invocación).
     let input = StepInput {
             families: input_families,
             parameters: step_parameters,
         };
 
-        // Touch data providers to mark usage (prepares for future DataAggregationStep)
+        // 2. (Previsional) Acceso a metadatos de data_providers: en el futuro se podrían
+        //    crear steps de agregación que necesiten estos proveedores; esto garantiza
+        //    que la API se use y se detecten cambios tempranamente.
         for (k, prov) in &self.data_providers {
             let _ = k;
             let _ = prov.get_name();
@@ -81,29 +101,32 @@ impl WorkflowManager {
     let _ = step.get_required_input_types();
     let _ = step.get_output_types();
     let _ = step.allows_branching();
+    // 3. Ejecutar el step concreto (obtiene familias/resultados + execution_info preliminar).
     let mut output = step.execute(
             input,
             &self.molecule_providers,
             &self.properties_providers,
         ).await?;
         
-        // Augment execution info with root / parent / branch metadata
+        // 4. Enriquecer metadata de ejecución con contexto global de workflow (root, parent, branch).
         let mut exec = output.execution_info.clone();
         exec.root_execution_id = self.current_root_execution_id;
         exec.parent_step_id = self.last_step_id;
     exec.branch_from_step_id = self.branch_origin;
         self.last_step_id = Some(exec.step_id);
 
+    // 5. Persistir la ejecución (in-memory + opcionalmente DB) para reconstrucción posterior.
     self.execution_repo.save_step_execution(&exec).await?;
-    // Reflect enriched metadata back into returned output
+    // 6. Devolver execution_info enriquecido al llamador.
     output.execution_info = exec.clone();
 
-        // Persist families and relationships
+        // 7. Persistir familias (upsert) y la relación step->family (histórico y consultas trazables).
         for fam in &output.families {
             let _ = self.execution_repo.upsert_family(fam).await; // ignore errors for now
             let _ = self.execution_repo.link_step_family(exec.step_id, fam.id).await;
         }
         
+    // 8. Resultado final con familias y snapshot de ejecución completamente contextualizado.
     Ok(output)
     }
     

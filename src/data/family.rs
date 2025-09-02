@@ -1,3 +1,17 @@
+//! Definición de la entidad `MoleculeFamily` y estructuras relacionadas para
+//! representar un conjunto de moléculas y sus propiedades calculadas con
+//! trazabilidad completa.
+//! 
+//! Objetivos de este módulo:
+//! - Mantener las moléculas agrupadas de forma lógica (familia) para operar
+//!   en bloque durante el workflow.
+//! - Adjuntar propiedades calculadas (posiblemente múltiples valores) con
+//!   referencia explícita al proveedor y parámetros usados.
+//! - Facilitar auditoría y branching: cada `FamilyProperty` contiene un
+//!   `ProviderReference` que permite saber exactamente el origen de los datos.
+//! - Evitar dependencia directa entre propiedades y steps: las propiedades
+//!   son independientes del step y sólo registran proveedor + parámetros,
+//!   permitiendo reutilización en diferentes workflows / ramas.
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use uuid::Uuid;

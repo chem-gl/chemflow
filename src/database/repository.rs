@@ -1,7 +1,24 @@
+//! Repositorio de persistencia para ejecuciones de steps y familias.
+//! Proporciona almacenamiento en memoria (rápido para tests y prototipos) y, si
+//! se inicializa con un pool PostgreSQL, persiste también en base de datos.
+//! 
+//! Responsabilidades clave:
+//! - Guardar metadatos de ejecución (StepExecutionInfo) con parámetros y proveedores.
+//! - Upsert de familias de moléculas con sus propiedades y proveedor fuente.
+//! - Guardar relación many-to-many step <-> familia para reconstruir flujos e historial.
+//! - Recuperar familias y ejecuciones por ID, así como filtrar por root_execution_id
+//!   para reconstruir un árbol/linaje completo, incluyendo ramas.
+//! - Soporte para branching mediante duplicación controlada de step_id en ramas (save_step_execution_for_branch).
+//!
+//! Notas de Trazabilidad:
+//! Cada propiedad almacenada en una familia lleva un ProviderReference que
+//! señala proveedor, versión, parámetros de ejecución y execution_id único.
+//! Esto permite auditoría y reproducibilidad independiente del step que la generó.
 use std::collections::HashMap;
 use uuid::Uuid;
 use crate::workflow::step::{StepExecutionInfo, StepStatus};
 use crate::data::family::MoleculeFamily;
+use sqlx::Row; // Para acceso dinámico a columnas al usar sqlx::query en lugar de query! macro
 
 #[derive(Clone)]
 pub struct WorkflowExecutionRepository {
@@ -25,12 +42,15 @@ impl WorkflowExecutionRepository {
     }
 
     pub async fn save_step_execution(&self, execution: &StepExecutionInfo) -> Result<(), Box<dyn std::error::Error>> {
-        // Always store in-memory for quick retrieval
+        // 1. Siempre guarda en memoria para acceso rápido (cache de sesiones / pruebas).
         {
             let mut guard = self.in_memory.write().await;
             guard.entry(execution.step_id).or_default().push(execution.clone());
         }
         if let Some(pool) = &self.pool {
+            // 2. Persistencia en PostgreSQL: la tabla workflow_step_executions debe existir
+            //    (creada por migraciones). ON CONFLICT permite actualizar estado y parámetros
+            //    si se re-ejecuta un step o cambia su estado (ej: Running -> Completed).
             sqlx::query(
                 "INSERT INTO workflow_step_executions (step_id, name, description, status, parameters, providers_used, start_time, end_time)
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -52,6 +72,7 @@ impl WorkflowExecutionRepository {
 
     pub async fn upsert_family(&self, family: &MoleculeFamily) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
+            // 1. Upsert de la familia completa como JSON estructurado (para recuperación íntegra).
             sqlx::query(
                 "INSERT INTO molecule_families (id, name, description, molecules, properties, parameters, source_provider)
                  VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -67,7 +88,8 @@ impl WorkflowExecutionRepository {
             .execute(pool)
             .await?;
 
-            // Insert individual property entries for query
+            // 2. Inserción de entradas individuales de propiedades para consultas analíticas
+            //    eficientes (indexadas por property_name y timestamp). Evita duplicados.
             for (prop_name, entry) in &family.properties {
                 for value in &entry.values {
                     sqlx::query(
@@ -90,6 +112,7 @@ impl WorkflowExecutionRepository {
 
     pub async fn link_step_family(&self, step_id: Uuid, family_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
+            // Relación step <-> familia para reconstruir qué familias se generaron / modificaron en cada step.
             sqlx::query(
                 "INSERT INTO workflow_step_family (step_id, family_id) VALUES ($1,$2) ON CONFLICT DO NOTHING"
             )
@@ -103,22 +126,37 @@ impl WorkflowExecutionRepository {
 
     pub async fn get_family(&self, id: Uuid) -> Result<Option<MoleculeFamily>, Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
-            let row = sqlx::query!("SELECT id, name, description, molecules, properties, parameters, source_provider FROM molecule_families WHERE id = $1", id)
-                .fetch_optional(pool)
-                .await?;
-            if let Some(r) = row {
-                let molecules_val = r.molecules; // NOT NULL column
-                let properties_val = r.properties; // NOT NULL
-                let parameters_val = r.parameters; // NOT NULL
-                let source_provider_val = r.source_provider.unwrap_or(serde_json::json!(null));
+            // Nota: usamos sqlx::query en vez de query! para evitar dependencias de introspección
+            // en tiempo de compilación y posibles fallos de proc-macro ("failed to load macro")
+            // cuando el artefacto dinámico no está disponible tras un clean o en entornos CI.
+            let row_opt = sqlx::query(
+                "SELECT id, name, description, molecules, properties, parameters, source_provider \n \
+                 FROM molecule_families WHERE id = $1"
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+
+            if let Some(row) = row_opt {
+                // Extraemos valores JSONB y los deserializamos
+                let id: Uuid = row.try_get("id")?;
+                let name: String = row.try_get("name")?;
+                let description: Option<String> = row.try_get("description")?;
+                let molecules_val: serde_json::Value = row.try_get("molecules")?;
+                let properties_val: serde_json::Value = row.try_get("properties")?;
+                let parameters_val: serde_json::Value = row.try_get("parameters")?;
+                let source_provider_val: Option<serde_json::Value> = row.try_get("source_provider")?;
                 let family = MoleculeFamily {
-                    id: r.id,
-                    name: r.name,
-                    description: r.description,
+                    id,
+                    name,
+                    description,
                     molecules: serde_json::from_value(molecules_val)?,
                     properties: serde_json::from_value(properties_val)?,
                     parameters: serde_json::from_value(parameters_val)?,
-                    source_provider: serde_json::from_value(source_provider_val)?,
+                    source_provider: match source_provider_val {
+                        Some(v) => serde_json::from_value(v)?,
+                        None => None,
+                    },
                 };
                 return Ok(Some(family));
             }
@@ -127,7 +165,7 @@ impl WorkflowExecutionRepository {
     }
 
     pub async fn get_execution(&self, execution_id: Uuid) -> Result<Vec<StepExecutionInfo>, Box<dyn std::error::Error>> {
-        // Prefer in-memory
+    // Preferimos in-memory (más rápido). Si se necesita consolidar con BD, se puede extender.
         let guard = self.in_memory.read().await;
         Ok(guard.get(&execution_id).cloned().unwrap_or_default())
     }
@@ -138,6 +176,7 @@ impl WorkflowExecutionRepository {
     }
 
     pub async fn save_step_execution_for_branch(&self, execution: &StepExecutionInfo, branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
+    // Se clona la ejecución y se altera el step_id para representar la rama.
         let mut cloned = execution.clone();
         cloned.step_id = branch_id; // treat branch as separate id for now
         self.save_step_execution(&cloned).await
@@ -151,7 +190,8 @@ impl WorkflowExecutionRepository {
         Ok(())
     }
 
-    /// Gathers all step executions matching a given root_execution_id (in-memory only for now).
+    /// Recolecta todos los steps que comparten el mismo root_execution_id. Esto permite
+    /// reconstruir el linaje completo (incluyendo steps de ramas) ordenado cronológicamente.
     pub async fn get_steps_by_root(&self, root_id: Uuid) -> Vec<StepExecutionInfo> {
         let guard = self.in_memory.read().await;
         let mut collected = Vec::new();
