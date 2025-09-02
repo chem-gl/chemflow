@@ -16,6 +16,10 @@ impl GenericPhysChemProvider { pub fn new() -> Self { Self { name: "generic_phys
     "logp","logd","pka","logs","mw","psa","volume","homo_energy","lumo_energy","partial_charge","polarizability","rotor_count","mr","hydration_energy","ld50"
     ].into_iter().map(|s| s.to_string()).collect() } } }
 
+impl Default for GenericPhysChemProvider {
+    fn default() -> Self { Self::new() }
+}
+
 #[async_trait]
 impl PropertiesProvider for GenericPhysChemProvider {
     fn get_name(&self) -> &str { &self.name }

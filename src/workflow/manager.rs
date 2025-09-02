@@ -107,12 +107,24 @@ impl WorkflowManager {
                 None
             };
             let prospective_param_hash = crate::database::repository::compute_sorted_hash(&step_parameters);
-            let param_changed = matches!(&prev_exec_opt, Some(prev_exec) if prev_exec.parameter_hash.as_deref() != Some(&prospective_param_hash));
-            let input_changed = match &prev_exec_opt {
-                Some(prev_exec) => prev_exec.parameters.get("_input_families_hash").and_then(|v| v.as_str()) != Some(&input_families_hash),
+            // Compute previous execution 'user parameter' hash by stripping internal metadata keys (prefixed with underscore)
+            let param_changed = match &prev_exec_opt {
+                Some(prev_exec) => {
+                    let prev_user_params: HashMap<_, _> = prev_exec.parameters.iter()
+                        .filter(|(k, _)| !k.starts_with('_'))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    let prev_user_hash = crate::database::repository::compute_sorted_hash(&prev_user_params);
+                    prev_user_hash != prospective_param_hash
+                }
                 None => false,
             };
-            // Abrimos nueva rama lógica si cambian parámetros o cambia la composición/hash de familias de entrada
+            // Solo consideramos cambio de input para branching si es re-ejecución del mismo step (mismo nombre lógico)
+            let input_changed = match &prev_exec_opt {
+                Some(prev_exec) if prev_exec.step_name == step.get_name() => prev_exec.parameters.get("_input_families_hash").and_then(|v| v.as_str()) != Some(&input_families_hash),
+                _ => false,
+            };
+            // Abrimos nueva rama lógica si cambian parámetros o (mismo step re-ejecutado con diferente input)
             if (param_changed || input_changed) && self.branch_origin != self.last_step_id {
                 self.branch_origin = self.last_step_id;
             }
@@ -191,7 +203,9 @@ impl WorkflowManager {
         self.last_step_id = Some(exec.step_id);
         // Persistir hash input_families para comparación futura (antes de salvar
         // execution_info)
-        exec.parameters.insert("_input_families_hash".into(), serde_json::json!(input_families_hash));
+    exec.parameters.insert("_input_families_hash".into(), serde_json::json!(input_families_hash));
+    // Recompute parameter_hash after mutating parameters to preserve integrity_ok expectations
+    exec.parameter_hash = Some(crate::database::repository::compute_sorted_hash(&exec.parameters));
 
         // (Legacy source_provider removal) ahora la provenance inicial se asigna
         // mediante creación explícita en steps de adquisición si fuera necesario.
@@ -273,8 +287,8 @@ impl WorkflowManager {
     /// 1. Obtiene todos los steps del root hasta el step objetivo (exclusivo).
     /// 2. Reconstruye familias aplicando cada step secuencialmente.
     /// 3. Ajusta last_step_id al step previo para permitir reemplazar/ramificar.
-    /// Nota: requiere que los objetos de step originales estén disponibles (no
-    /// se serializan aún). Por ahora se limita a escenarios en memoria.
+    ///    Nota: requiere que los objetos de step originales estén disponibles (no
+    ///    se serializan aún). Por ahora se limita a escenarios en memoria.
     pub async fn reexecute_from(&mut self, target_parent_step: uuid::Uuid, steps_sequence: &[&dyn WorkflowStep]) -> Result<Vec<MoleculeFamily>, Box<dyn std::error::Error>> {
     // TODO: Integrar con invocación externa (mantener aunque no se use aún para cumplir requisitos de branching).
         let lineage = self.execution_repo.get_steps_by_root(self.current_root_execution_id).await;

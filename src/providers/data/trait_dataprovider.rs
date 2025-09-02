@@ -7,23 +7,19 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-
 use crate::data::family::MoleculeFamily;
-
 #[async_trait]
 pub trait DataProvider: Send + Sync {
     fn get_name(&self) -> &str;
     fn get_version(&self) -> &str;
     fn get_description(&self) -> &str;
     fn get_available_parameters(&self) -> HashMap<String, DataParameterDefinition>;
-
     /// Calcula datos (agregados) sobre una o varias familias. Devuelve un
     /// `Value` JSON para permitir esquemas flexibles. El JSON debería
     /// contener suficiente estructura para mantener trazabilidad (ej.
     /// listas de IDs, versión de algoritmo, etc.).
     async fn calculate(&self, families: &[MoleculeFamily], parameters: &HashMap<String, Value>) -> Result<Value, Box<dyn std::error::Error>>;
 }
-
 #[derive(Debug, Clone)]
 pub struct DataParameterDefinition {
     pub name: String,
@@ -32,7 +28,6 @@ pub struct DataParameterDefinition {
     pub required: bool,
     pub default_value: Option<Value>,
 }
-
 #[derive(Debug, Clone)]
 pub enum DataParameterType {
     String,
@@ -41,13 +36,10 @@ pub enum DataParameterType {
     Array,
     Object,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     struct AvgCountProvider;
-
     #[async_trait]
     impl DataProvider for AvgCountProvider {
         fn get_name(&self) -> &str {
@@ -67,7 +59,6 @@ mod tests {
             Ok(Value::Number(serde_json::Number::from(total)))
         }
     }
-
     #[tokio::test]
     async fn test_dataprovider() {
         let prov = AvgCountProvider;
@@ -76,7 +67,6 @@ mod tests {
         let _ = prov.get_description();
         let res = prov.calculate(&[], &HashMap::new()).await.unwrap();
         assert_eq!(res, Value::Number(0.into()));
-
         let defs = prov.get_available_parameters();
         assert!(defs.is_empty());
         let def = DataParameterDefinition { name: "threshold".into(),

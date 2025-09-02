@@ -44,21 +44,24 @@ impl WorkflowStep for AggregationLikeStep {
                      -> Result<StepOutput, Box<dyn std::error::Error>> {
         let mut results = HashMap::new();
         results.insert("aggregation".to_string(), serde_json::json!({"count":0}));
-        Ok(StepOutput { families: vec![],
-                        results,
-                        execution_info: StepExecutionInfo { step_id: self.id,
-                                                            step_name: self.get_name().to_string(),
-                                                            step_description: self.get_description().to_string(),
-                                                            parameters: HashMap::new(),
-                                                            parameter_hash: Some(chemflow_rust::database::repository::compute_sorted_hash(&HashMap::<String, serde_json::Value>::new())),
-                                                            providers_used: vec![],
-                                                            start_time: chrono::Utc::now(),
-                                                            end_time: chrono::Utc::now(),
-                                                            status: StepStatus::Completed,
-                                                            root_execution_id: Uuid::new_v4(),
-                                                            parent_step_id: None,
-                                                            branch_from_step_id: None,
-                                                            input_family_ids: vec![] } })
+    Ok(StepOutput { families: vec![],
+            results,
+            execution_info: StepExecutionInfo { step_id: self.id,
+                                step_name: self.get_name().to_string(),
+                                step_description: self.get_description().to_string(),
+                                parameters: HashMap::new(),
+                                parameter_hash: Some(chemflow_rust::database::repository::compute_sorted_hash(&HashMap::<String, serde_json::Value>::new())),
+                                providers_used: vec![],
+                                start_time: chrono::Utc::now(),
+                                end_time: chrono::Utc::now(),
+                                status: StepStatus::Completed,
+                                root_execution_id: Uuid::new_v4(),
+                                parent_step_id: None,
+                                branch_from_step_id: None,
+                                input_family_ids: vec![],
+                                input_snapshot: Some(chemflow_rust::workflow::step::build_input_snapshot(&[])),
+                                step_config: None,
+                                integrity_ok: None } })
     }
 }
 

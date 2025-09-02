@@ -26,7 +26,6 @@ use sha2::{Digest, Sha256};
 use sqlx::Row; // Para acceso dinámico a columnas al usar sqlx::query en lugar de query! macro
 use std::collections::HashMap;
 use uuid::Uuid;
-
 pub fn compute_sorted_hash<T: serde::Serialize>(value: &T) -> String {
     let json = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
     let canonical = canonical_json(&json);
@@ -34,7 +33,6 @@ pub fn compute_sorted_hash<T: serde::Serialize>(value: &T) -> String {
     hasher.update(canonical.as_bytes());
     format!("{:x}", hasher.finalize())
 }
-
 fn canonical_json(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::Object(map) => {
@@ -50,24 +48,20 @@ fn canonical_json(v: &serde_json::Value) -> String {
         _ => v.to_string(),
     }
 }
-
 #[derive(Clone)]
 pub struct WorkflowExecutionRepository {
     in_memory: std::sync::Arc<tokio::sync::RwLock<HashMap<Uuid, Vec<StepExecutionInfo>>>>,
     pub pool: Option<sqlx::Pool<sqlx::Postgres>>,
 }
-
 impl WorkflowExecutionRepository {
     pub fn new(_in_memory_only: bool) -> Self {
         Self { in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                pool: None /* in-memory only (placeholder for future pool wiring using flag) */ }
     }
-
     pub async fn with_pool(pool: sqlx::Pool<sqlx::Postgres>) -> Self {
         Self { in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                pool: Some(pool) }
     }
-
     pub async fn save_step_execution(&self, execution: &StepExecutionInfo) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Siempre guarda en memoria para acceso rápido (cache de sesiones /
         //    pruebas).
@@ -180,7 +174,6 @@ impl WorkflowExecutionRepository {
         }
         Ok(())
     }
-
     async fn ensure_core_schema(&self, pool: &sqlx::Pool<sqlx::Postgres>) -> Result<(), Box<dyn std::error::Error>> {
         // Creamos tablas críticas con IF NOT EXISTS para ser idempotente.
         // 0001
@@ -218,13 +211,11 @@ impl WorkflowExecutionRepository {
         sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_steps ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, step_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, step_id) )").execute(pool).await?;
         Ok(())
     }
-
     /// Acceso de solo lectura al pool (principalmente para tests de
     /// integración).
     pub fn pool(&self) -> Option<&sqlx::Pool<sqlx::Postgres>> {
         self.pool.as_ref()
     }
-
     pub async fn upsert_family(&self, family: &MoleculeFamily) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
             // Debug: molecule count before
@@ -255,7 +246,6 @@ impl WorkflowExecutionRepository {
             .bind(&family.family_hash)
             .execute(&mut *tx)
             .await?;
-
             // 2. Upsert de moléculas + relaciones ahora que la fila de familia existe.
             for (idx, mol) in family.molecules.iter().enumerate() {
                 eprintln!("[upsert_family] inserting molecule {} ({}/{})", mol.inchikey, idx + 1, family.molecules.len());
@@ -278,7 +268,6 @@ impl WorkflowExecutionRepository {
                  .await?;
             }
             eprintln!("[upsert_family] completed molecules link for family {} total={}", family.id, family.molecules.len());
-
             // 3. Propiedades (igual que antes) -> tabla flatten.
             for (prop_name, entry) in &family.properties {
                 for value in &entry.values {
@@ -318,7 +307,6 @@ impl WorkflowExecutionRepository {
                                                                                                                                                           .await?;
                 }
             }
-
             tx.commit().await?;
             if let (Some(bc), Ok((ac,))) = (before, sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool).await) {
                 eprintln!("[upsert_family] molecule count before={} after={} delta={} fam_id={}", bc, ac, ac - bc, family.id);
@@ -326,7 +314,6 @@ impl WorkflowExecutionRepository {
         }
         Ok(())
     }
-
     pub async fn link_step_family(&self, step_id: Uuid, family_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
             // Relación step <-> familia para reconstruir qué familias se generaron /
@@ -338,14 +325,12 @@ impl WorkflowExecutionRepository {
         }
         Ok(())
     }
-
     pub async fn get_family(&self, id: Uuid) -> Result<Option<MoleculeFamily>, Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
             // Recuperamos metadatos de la familia (sin las moléculas aún).
             let row_opt = sqlx::query("SELECT id, name, description, properties, parameters, provenance, frozen, frozen_at, family_hash FROM molecule_families WHERE id = $1").bind(id)
                                                                                                                                                                               .fetch_optional(pool)
                                                                                                                                                                               .await?;
-
             if let Some(row) = row_opt {
                 let id: Uuid = row.try_get("id")?;
                 let name: String = row.try_get("name")?;
@@ -356,7 +341,6 @@ impl WorkflowExecutionRepository {
                 let frozen: bool = row.try_get("frozen")?;
                 let frozen_at: Option<chrono::DateTime<chrono::Utc>> = row.try_get("frozen_at")?;
                 let family_hash: Option<String> = row.try_get("family_hash")?;
-
                 // Ahora obtenemos las moléculas vía la tabla normalizada.
                 let molecule_rows = sqlx::query(
                                                 "SELECT m.inchikey, m.inchi, m.smiles, m.common_name FROM molecule_family_molecules fm
@@ -371,7 +355,6 @@ impl WorkflowExecutionRepository {
                                               smiles: r.try_get("smiles")?,
                                               common_name: r.try_get("common_name")? });
                 }
-
                 // Interpret JSON null (Some(Value::Null)) as absence of provenance to avoid
                 // deserialization error.
                 let provenance: Option<crate::data::family::FamilyProvenance> = match provenance_val {
@@ -437,7 +420,6 @@ impl WorkflowExecutionRepository {
         }
         Ok(None)
     }
-
     /// Congela una familia existente marcando frozen, timestamp y recalculando
     /// hash.
     pub async fn freeze_family(&self, family_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
@@ -460,7 +442,6 @@ impl WorkflowExecutionRepository {
         }
         Ok(())
     }
-
     /// Inserta/actualiza resultados con tipo específico (result_type).
     pub async fn upsert_step_results_typed(&self, step_id: Uuid, results: &HashMap<String, serde_json::Value>, result_type: &str) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
@@ -478,34 +459,28 @@ impl WorkflowExecutionRepository {
         }
         Ok(())
     }
-
     pub async fn get_execution(&self, execution_id: Uuid) -> Result<Vec<StepExecutionInfo>, Box<dyn std::error::Error>> {
         // Preferimos in-memory (más rápido). Si se necesita consolidar con BD, se puede
         // extender.
         let guard = self.in_memory.read().await;
         Ok(guard.get(&execution_id).cloned().unwrap_or_default())
     }
-
     pub async fn get_step_execution(&self, execution_id: Uuid, step_index: usize) -> Result<StepExecutionInfo, Box<dyn std::error::Error>> {
         let all = self.get_execution(execution_id).await?;
         all.get(step_index).cloned().ok_or("Step not found".into())
     }
-
     pub async fn save_step_execution_for_branch(&self, execution: &StepExecutionInfo, branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         // Se clona la ejecución y se altera el step_id para representar la rama.
         let mut cloned = execution.clone();
         cloned.step_id = branch_id; // treat branch as separate id for now
         self.save_step_execution(&cloned).await
     }
-
     pub async fn get_step(&self, _step_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         Err("Not implemented".into())
     }
-
     pub async fn save_step_for_branch(&self, _step: &(), _branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }
-
     /// Recolecta todos los steps que comparten el mismo root_execution_id. Esto
     /// permite reconstruir el linaje completo (incluyendo steps de ramas)
     /// ordenado cronológicamente.
@@ -522,15 +497,13 @@ impl WorkflowExecutionRepository {
         collected.sort_by_key(|e| e.start_time);
         collected
     }
-
     /// Verifica integridad recomputando hash de parámetros y comparando (solo in-memory).
     pub async fn verify_execution_integrity(&self, step_id: Uuid) -> Option<bool> {
-        if let Ok(entries) = self.get_execution(step_id).await { if let Some(last) = entries.last() {
-            if let Some(h) = &last.parameter_hash { return Some(h == &compute_sorted_hash(&last.parameters)); }
-        }}
+        if let Ok(entries) = self.get_execution(step_id).await && let Some(last) = entries.last() {
+            return last.parameter_hash.as_ref().map(|h| h == &compute_sorted_hash(&last.parameters));
+        }
         None
     }
-
     /// Construye estructura en árbol (mapa parent->children) desde root_id.
     pub async fn build_branch_tree(&self, root_id: Uuid) -> serde_json::Value {
         let steps = self.get_steps_by_root(root_id).await;
@@ -548,7 +521,6 @@ impl WorkflowExecutionRepository {
         let roots: Vec<&StepExecutionInfo> = steps.iter().filter(|s| s.parent_step_id.is_none()).collect();
         serde_json::json!(roots.into_iter().map(|r| build(r, &children)).collect::<Vec<_>>())
     }
-
     /// Lista valores de una propiedad (flatten) con su provider principal (primer provider registrado) filtrando opcionalmente por provider_name.
     pub async fn list_property_values(&self, property: &str, provider_filter: Option<&str>) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
@@ -576,7 +548,6 @@ impl WorkflowExecutionRepository {
         }
         out
     }
-
     /// Exporta un reporte consolidado de un root_execution_id con pasos y familias.
     pub async fn export_workflow_report(&self, root_id: Uuid) -> serde_json::Value {
         let steps = self.get_steps_by_root(root_id).await;
@@ -589,18 +560,15 @@ impl WorkflowExecutionRepository {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::workflow::step::StepStatus;
     use chrono::Utc;
     use std::collections::HashMap;
-
     #[tokio::test]
     async fn test_repository_methods() {
         let repo = WorkflowExecutionRepository::new(true);
-
     let execution_info = StepExecutionInfo { step_id: Uuid::new_v4(),
                          step_name: "test".into(),
                          step_description: "repo test".into(),
@@ -617,31 +585,23 @@ mod tests {
                          input_snapshot: None,
                          step_config: None,
                          integrity_ok: None };
-
         // Test save_step_execution
         repo.save_step_execution(&execution_info).await.unwrap();
-
         // Test get_execution
         let executions = repo.get_execution(execution_info.step_id).await.unwrap();
         assert_eq!(executions.len(), 1);
-
         // Test get_step_execution
         let step = repo.get_step_execution(execution_info.step_id, 0).await.unwrap();
         assert_eq!(step.step_id, execution_info.step_id);
-
         // Test save_step_execution_for_branch
         let branch_id = Uuid::new_v4();
         repo.save_step_execution_for_branch(&execution_info, branch_id).await.unwrap();
-
         let branch_executions = repo.get_execution(branch_id).await.unwrap();
         assert_eq!(branch_executions.len(), 1);
-
         // Test get_step (will error but calls the method)
         let _ = repo.get_step(Uuid::new_v4()).await;
-
         // Test save_step_for_branch
         repo.save_step_for_branch(&(), Uuid::new_v4()).await.unwrap();
-
         // Call get_family (will be None in in-memory mode without persisted DB pool)
         let _none = repo.get_family(Uuid::new_v4()).await.unwrap();
         // Exercise freeze_family (no-op without DB, ensures method is used)
@@ -651,14 +611,12 @@ mod tests {
         assert!(!list.is_empty());
     }
 }
-
 #[cfg(test)]
 mod repository_usage_tests {
     use super::*;
     use crate::workflow::step::StepStatus;
     use chrono::Utc;
     use uuid::Uuid;
-
     #[tokio::test]
     async fn test_repo_all_methods() {
         let repo = WorkflowExecutionRepository::new(true);
@@ -695,13 +653,11 @@ mod repository_usage_tests {
         let _by_root = repo.get_steps_by_root(info.root_execution_id).await;
     }
 }
-
 async fn _use_repository_methods() {
     use crate::workflow::step::{StepExecutionInfo, StepStatus};
     use chrono::Utc;
     use std::collections::HashMap;
     use uuid::Uuid;
-
     let repo = WorkflowExecutionRepository::new(true);
     let id = Uuid::new_v4();
     let info = StepExecutionInfo { step_id: id,

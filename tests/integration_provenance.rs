@@ -51,21 +51,24 @@ impl WorkflowStep for PropStep {
                              provider_ref,
                              Some(self.id));
         }
-        Ok(StepOutput { families: input.families.clone(),
-                        results: HashMap::new(),
-                        execution_info: StepExecutionInfo { step_id: self.id,
-                                                            step_name: self.name.into(),
-                                                            step_description: self.get_description().into(),
-                                                            parameters: input.parameters.clone(),
-                                                            parameter_hash: Some(chemflow_rust::database::repository::compute_sorted_hash(&input.parameters)),
-                                                            providers_used: Vec::new(),
-                                                            start_time: Utc::now(),
-                                                            end_time: Utc::now(),
-                                                            status: StepStatus::Completed,
-                                                            root_execution_id: Uuid::new_v4(),
-                                                            parent_step_id: None,
-                                                            branch_from_step_id: None,
-                                                            input_family_ids: input.families.iter().map(|f| f.id).collect() } })
+    Ok(StepOutput { families: input.families.clone(),
+            results: HashMap::new(),
+            execution_info: StepExecutionInfo { step_id: self.id,
+                                step_name: self.name.into(),
+                                step_description: self.get_description().into(),
+                                parameters: input.parameters.clone(),
+                                parameter_hash: Some(chemflow_rust::database::repository::compute_sorted_hash(&input.parameters)),
+                                providers_used: Vec::new(),
+                                start_time: Utc::now(),
+                                end_time: Utc::now(),
+                                status: StepStatus::Completed,
+                                root_execution_id: Uuid::new_v4(),
+                                parent_step_id: None,
+                                branch_from_step_id: None,
+                                input_family_ids: input.families.iter().map(|f| f.id).collect(),
+                                input_snapshot: Some(chemflow_rust::workflow::step::build_input_snapshot(&input.families)),
+                                step_config: None,
+                                integrity_ok: None } })
     }
 }
 

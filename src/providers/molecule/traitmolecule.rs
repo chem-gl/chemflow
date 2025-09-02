@@ -6,22 +6,18 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-
 use crate::data::family::MoleculeFamily;
-
 #[async_trait]
 pub trait MoleculeProvider: Send + Sync {
     fn get_name(&self) -> &str;
     fn get_version(&self) -> &str;
     fn get_description(&self) -> &str;
     fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition>;
-
     /// Construye una nueva familia de moléculas usando los parámetros
     /// (ya validados externamente). Debe devolver una familia autocontenida
     /// con `source_provider` apropiado agregado posteriormente por el step.
     async fn get_molecule_family(&self, parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>>;
 }
-
 #[derive(Debug, Clone)]
 pub struct ParameterDefinition {
     pub name: String,
@@ -30,7 +26,6 @@ pub struct ParameterDefinition {
     pub required: bool,
     pub default_value: Option<Value>,
 }
-
 #[derive(Debug, Clone)]
 pub enum ParameterType {
     String,
@@ -39,7 +34,6 @@ pub enum ParameterType {
     Array,
     Object,
 }
-
 fn _use_molecule_params() {
     let pd = ParameterDefinition { name: String::new(),
                                    description: String::new(),
@@ -52,35 +46,28 @@ fn _use_molecule_params() {
     let _ = &pd.data_type;
     let _ = pd.required;
     let _ = &pd.default_value;
-    // Use all variants
     let _ = ParameterType::String;
     let _ = ParameterType::Number;
     let _ = ParameterType::Boolean;
     let _ = ParameterType::Array;
     let _ = ParameterType::Object;
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
-
     struct TestMoleculeProvider;
-
     #[async_trait]
     impl MoleculeProvider for TestMoleculeProvider {
         fn get_name(&self) -> &str {
             "Test Provider"
         }
-
         fn get_version(&self) -> &str {
             "1.0.0"
         }
-
         fn get_description(&self) -> &str {
             "Test molecule provider"
         }
-
         fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition> {
             let mut params = HashMap::new();
             params.insert("param1".to_string(),
@@ -91,25 +78,20 @@ mod tests {
                                                 default_value: Some(Value::String("default".to_string())) });
             params
         }
-
         async fn get_molecule_family(&self, _parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
             Ok(MoleculeFamily::new("Test".to_string(), None))
         }
     }
-
     #[test]
     fn test_molecule_provider_methods() {
         let provider = TestMoleculeProvider;
-
         // Call all methods
         assert_eq!(provider.get_name(), "Test Provider");
         assert_eq!(provider.get_version(), "1.0.0");
         assert_eq!(provider.get_description(), "Test molecule provider");
-
         let params = provider.get_available_parameters();
         assert!(params.contains_key("param1"));
     }
-
     #[test]
     fn test_parameter_definition_fields() {
         let param_def = ParameterDefinition { name: "test_param".to_string(),
@@ -117,7 +99,6 @@ mod tests {
                                               data_type: ParameterType::String,
                                               required: false,
                                               default_value: Some(Value::Bool(true)) };
-
         // Access all fields
         assert_eq!(param_def.name, "test_param");
         assert_eq!(param_def.description, "Test description");
@@ -125,7 +106,6 @@ mod tests {
         assert!(!param_def.required);
         assert!(param_def.default_value.is_some());
     }
-
     #[test]
     fn test_parameter_type_variants() {
         // Use all variants
@@ -136,14 +116,11 @@ mod tests {
         let _object_type = ParameterType::Object;
     }
 }
-
 #[cfg(test)]
 mod traitmolecule_usage_tests {
     use super::*;
     use std::collections::HashMap;
-
     struct DummyMoleculeProv;
-
     #[async_trait]
     impl MoleculeProvider for DummyMoleculeProv {
         fn get_name(&self) -> &str {
@@ -169,7 +146,6 @@ mod traitmolecule_usage_tests {
             Ok(crate::data::family::MoleculeFamily::new("n".to_string(), None))
         }
     }
-
     #[test]
     fn test_dummy_molecule_provider_methods() {
         let prov = DummyMoleculeProv;
@@ -179,7 +155,6 @@ mod traitmolecule_usage_tests {
         let params = prov.get_available_parameters();
         assert!(params.contains_key("x"));
     }
-
     #[test]
     fn test_parameter_definition_and_types() {
         let pd = ParameterDefinition { name: "n".to_string(),

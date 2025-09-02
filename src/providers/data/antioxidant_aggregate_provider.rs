@@ -1,13 +1,10 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-
 use crate::data::family::MoleculeFamily;
 use crate::providers::data::trait_dataprovider::{DataParameterDefinition, DataParameterType, DataProvider};
-
 /// Aggregates antioxidant activity statistics across families.
 pub struct AntioxidantAggregateProvider;
-
 #[async_trait]
 impl DataProvider for AntioxidantAggregateProvider {
     fn get_name(&self) -> &str {
@@ -47,14 +44,12 @@ impl DataProvider for AntioxidantAggregateProvider {
         Ok(serde_json::json!({ "count": count as i64, "mean": mean }))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::family::{FamilyProperty, MoleculeFamily, ProviderReference};
     use crate::data::types::LogPData;
     use chrono::Utc;
-
     #[tokio::test]
     async fn test_aggregate_provider() {
         let _p = AntioxidantAggregateProvider;

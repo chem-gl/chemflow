@@ -1,14 +1,11 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-
 use crate::data::family::{MoleculeFamily, ProviderReference};
 use crate::molecule::Molecule;
 use crate::providers::molecule::traitmolecule::{MoleculeProvider, ParameterDefinition, ParameterType};
-
 /// Provides a mock family of antioxidant seed molecules.
 pub struct AntioxidantSeedProvider;
-
 #[async_trait]
 impl MoleculeProvider for AntioxidantSeedProvider {
     fn get_name(&self) -> &str {
@@ -62,11 +59,9 @@ impl MoleculeProvider for AntioxidantSeedProvider {
         Ok(fam)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[tokio::test]
     async fn test_antioxidant_seed_provider_basic() {
         let prov = AntioxidantSeedProvider;

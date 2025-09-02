@@ -2,7 +2,6 @@ use chrono::Utc;
 use sqlx::{postgres::PgPoolOptions, Executor};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
-
 /// Runs pending SQL migrations located in the `migrations/` directory (or
 /// MIGRATIONS_DIR env var). Each `*.sql` file is treated as one migration and
 /// applied only once. Applied migrations are tracked in the `schema_migrations`
@@ -11,12 +10,10 @@ pub async fn run_migrations() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = env::var("DATABASE_URL")?;
     let migrations_dir = env::var("MIGRATIONS_DIR").unwrap_or_else(|_| "migrations".to_string());
     let migrations_path = Path::new(&migrations_dir);
-
     if !migrations_path.exists() {
         println!("[migrations] directory '{}' not found, skipping.", migrations_path.display());
         return Ok(());
     }
-
     // Intentar conectar; si la BD no existe (3D000) intentar crearla (replicar
     // lógica simplificada de config::ensure_database_exists)
     let pool = match PgPoolOptions::new().max_connections(5).connect(&database_url).await {
@@ -49,18 +46,15 @@ pub async fn run_migrations() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => return Err(Box::new(e)),
     };
-
     // Ensure table exists
     sqlx::query("CREATE TABLE IF NOT EXISTS schema_migrations (\n           version TEXT PRIMARY KEY,\n           applied_at TIMESTAMPTZ NOT NULL\n         )").execute(&pool)
                                                                                                                                                                .await?;
-
     // Collect sql files
     let mut files: Vec<PathBuf> = fs::read_dir(migrations_path)?.filter_map(|e| e.ok())
                                                                 .map(|e| e.path())
                                                                 .filter(|p| p.is_file() && p.extension().map(|e| e == "sql").unwrap_or(false))
                                                                 .collect();
     files.sort();
-
     let mut applied_any = false;
     for file in files {
         let version = file.file_name().unwrap().to_string_lossy().to_string();
@@ -68,13 +62,11 @@ pub async fn run_migrations() -> Result<(), Box<dyn std::error::Error>> {
         if already.is_some() {
             continue;
         }
-
         let sql_content = fs::read_to_string(&file)?;
         if sql_content.trim().is_empty() {
             continue;
         }
         println!("[migrations] Applying {version} ...");
-
         // Transactional apply
         let mut tx = pool.begin().await?;
         for statement in sql_content.split(';') {
@@ -90,7 +82,6 @@ pub async fn run_migrations() -> Result<(), Box<dyn std::error::Error>> {
         println!("[migrations] Applied {version} ✔");
         applied_any = true;
     }
-
     if !applied_any {
         println!("[migrations] No pending migrations.");
     }
