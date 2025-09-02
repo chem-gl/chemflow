@@ -1,9 +1,9 @@
-use async_trait::async_trait;
-use serde_json::Value;
-use std::collections::HashMap;
 use crate::data::family::{MoleculeFamily, ProviderReference};
 use crate::molecule::Molecule;
 use crate::providers::molecule::traitmolecule::MoleculeProvider;
+use async_trait::async_trait;
+use serde_json::Value;
+use std::collections::HashMap;
 pub struct MockMoleculeProvider {
     pub name: String,
     pub version: String,
@@ -27,7 +27,9 @@ impl MoleculeProvider for MockMoleculeProvider {
     fn get_available_parameters(&self) -> HashMap<String, crate::providers::molecule::traitmolecule::ParameterDefinition> {
         HashMap::new()
     }
-    async fn get_molecule_family(&self, parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
+    async fn get_molecule_family(&self,
+                                 parameters: &HashMap<String, Value>)
+                                 -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
         let molecule = Molecule::from_smiles("CCO".to_string())?;
         let mut family = MoleculeFamily::new("Mock Family".to_string(), Some("Mock description".to_string()));
         family.molecules.push(molecule);

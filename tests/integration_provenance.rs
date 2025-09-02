@@ -33,7 +33,12 @@ impl WorkflowStep for PropStep {
     fn allows_branching(&self) -> bool {
         true
     }
-    async fn execute(&self, mut input: StepInput, _m: &HashMap<String, Box<dyn MoleculeProvider>>, _p: &HashMap<String, Box<dyn PropertiesProvider>>, _d: &HashMap<String, Box<dyn DataProvider>>) -> Result<StepOutput, Box<dyn std::error::Error>> {
+    async fn execute(&self,
+                     mut input: StepInput,
+                     _m: &HashMap<String, Box<dyn MoleculeProvider>>,
+                     _p: &HashMap<String, Box<dyn PropertiesProvider>>,
+                     _d: &HashMap<String, Box<dyn DataProvider>>)
+                     -> Result<StepOutput, Box<dyn std::error::Error>> {
         // Add a dummy property contribution to each family
         for fam in &mut input.families {
             let provider_ref = ProviderReference { provider_type: "prop".into(),
@@ -49,7 +54,7 @@ impl WorkflowStep for PropStep {
                              provider_ref,
                              Some(self.id));
         }
-    Ok(StepOutput { families: input.families.clone(),
+        Ok(StepOutput { families: input.families.clone(),
             results: HashMap::new(),
             execution_info: StepExecutionInfo { step_id: self.id,
                                 step_name: self.name.into(),
@@ -79,23 +84,27 @@ async fn test_multi_provider_and_autobranch() {
     fam.recompute_hash();
     let families = vec![fam];
     // First step with parameter X=1
-    let s1 = PropStep { id: Uuid::new_v4(), name: "P1" };
+    let s1 = PropStep { id: Uuid::new_v4(),
+                        name: "P1" };
     let mut params1 = HashMap::new();
     params1.insert("X".into(), serde_json::json!(1));
     let out1 = manager.execute_step(&s1, families.clone(), params1).await.unwrap();
     assert_eq!(out1.families[0].get_property("logp").unwrap().providers.len(), 1);
     // Second step same params -> should not branch
-    let s2 = PropStep { id: Uuid::new_v4(), name: "P2" };
+    let s2 = PropStep { id: Uuid::new_v4(),
+                        name: "P2" };
     let mut params2 = HashMap::new();
     params2.insert("X".into(), serde_json::json!(1));
     let out2 = manager.execute_step(&s2, out1.families.clone(), params2).await.unwrap();
     assert!(out2.execution_info.branch_from_step_id.is_none(), "No branch expected");
     // Third step changed params -> causes branch
-    let s3 = PropStep { id: Uuid::new_v4(), name: "P3" };
+    let s3 = PropStep { id: Uuid::new_v4(),
+                        name: "P3" };
     let mut params3 = HashMap::new();
     params3.insert("X".into(), serde_json::json!(2));
     let out3 = manager.execute_step(&s3, out2.families.clone(), params3).await.unwrap();
-    assert!(out3.execution_info.branch_from_step_id.is_some(), "Branch expected due to param change");
+    assert!(out3.execution_info.branch_from_step_id.is_some(),
+            "Branch expected due to param change");
     let prop = out3.families[0].get_property("logp").unwrap();
     assert_eq!(prop.providers.len(), 3, "Three provider contributions accumulated");
     assert_eq!(prop.originating_steps.len(), 3);

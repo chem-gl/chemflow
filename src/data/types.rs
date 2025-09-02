@@ -2,7 +2,7 @@
 //! para asociar valores cuantitativos con trazabilidad (fuente, timestamp,
 //! estado de congelación). El trait `MolecularData` define una interfaz común
 //! para diferentes tipos de datos (LogP, toxicidad, etc.).
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub trait MolecularData: Serialize + DeserializeOwned + Send + Sync {
     /// Tipo nativo subyacente (ej: f64 para datos numéricos continuos).
     type NativeType;

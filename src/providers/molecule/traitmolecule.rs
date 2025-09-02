@@ -3,10 +3,10 @@
 //! parámetros (por ejemplo leyendo de una base de datos, archivo, API externa
 //! o generando moléculas sintéticas). Los parámetros y metadatos se registrarán
 //! en el step que invoque al proveedor para trazabilidad y branching.
+use crate::data::family::MoleculeFamily;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::data::family::MoleculeFamily;
 #[async_trait]
 pub trait MoleculeProvider: Send + Sync {
     fn get_name(&self) -> &str;
@@ -16,7 +16,9 @@ pub trait MoleculeProvider: Send + Sync {
     /// Construye una nueva familia de moléculas usando los parámetros
     /// (ya validados externamente). Debe devolver una familia autocontenida
     /// con `source_provider` apropiado agregado posteriormente por el step.
-    async fn get_molecule_family(&self, parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>>;
+    async fn get_molecule_family(&self,
+                                 parameters: &HashMap<String, Value>)
+                                 -> Result<MoleculeFamily, Box<dyn std::error::Error>>;
 }
 #[derive(Debug, Clone)]
 pub struct ParameterDefinition {
@@ -78,7 +80,9 @@ mod tests {
                                                 default_value: Some(Value::String("default".to_string())) });
             params
         }
-        async fn get_molecule_family(&self, _parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
+        async fn get_molecule_family(&self,
+                                     _parameters: &HashMap<String, Value>)
+                                     -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
             Ok(MoleculeFamily::new("Test".to_string(), None))
         }
     }
@@ -142,7 +146,9 @@ mod traitmolecule_usage_tests {
                                            default_value: None });
             m
         }
-        async fn get_molecule_family(&self, _parameters: &HashMap<String, serde_json::Value>) -> Result<crate::data::family::MoleculeFamily, Box<dyn std::error::Error>> {
+        async fn get_molecule_family(&self,
+                                     _parameters: &HashMap<String, serde_json::Value>)
+                                     -> Result<crate::data::family::MoleculeFamily, Box<dyn std::error::Error>> {
             Ok(crate::data::family::MoleculeFamily::new("n".to_string(), None))
         }
     }

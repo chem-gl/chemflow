@@ -1,9 +1,9 @@
-use async_trait::async_trait;
-use serde_json::Value;
-use std::collections::HashMap;
 use crate::data::family::MoleculeFamily;
 use crate::molecule::Molecule;
 use crate::providers::molecule::traitmolecule::{MoleculeProvider, ParameterDefinition, ParameterType};
+use async_trait::async_trait;
+use serde_json::Value;
+use std::collections::HashMap;
 pub struct TestMoleculeProvider;
 impl TestMoleculeProvider {
     pub fn new() -> Self {
@@ -36,7 +36,9 @@ impl MoleculeProvider for TestMoleculeProvider {
                                             default_value: Some(Value::Number(10.into())) });
         params
     }
-    async fn get_molecule_family(&self, parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
+    async fn get_molecule_family(&self,
+                                 parameters: &HashMap<String, Value>)
+                                 -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
         let count = parameters.get("count").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
         let mut molecules = Vec::new();
         for i in 0..count {
@@ -45,21 +47,23 @@ impl MoleculeProvider for TestMoleculeProvider {
             let inchikey = format!("TESTKEY{}", i);
             molecules.push(Molecule::new(inchikey, smiles, inchi, Some(format!("Test Molecule {}", i))));
         }
-        let mut family = MoleculeFamily::new(format!("Test Family with {} molecules", count), Some("Generated for testing".to_string()));
+        let mut family = MoleculeFamily::new(format!("Test Family with {} molecules", count),
+                                             Some("Generated for testing".to_string()));
         family.molecules = molecules;
         Ok(family)
     }
 }
 #[cfg(test)]
 mod tests {
-    use crate::providers::molecule::traitmolecule::MoleculeProvider;
     use super::TestMoleculeProvider;
+    use crate::providers::molecule::traitmolecule::MoleculeProvider;
     #[test]
     fn test_provider_metadata_and_parameters() {
         let provider = TestMoleculeProvider::new();
         assert_eq!(provider.get_name(), "Test Molecule Provider");
         assert_eq!(provider.get_version(), "1.0.0");
-        assert_eq!(provider.get_description(), "Provides test molecules for development and testing");
+        assert_eq!(provider.get_description(),
+                   "Provides test molecules for development and testing");
         let params = provider.get_available_parameters();
         assert!(params.contains_key("count"));
         let def = &params["count"];

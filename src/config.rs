@@ -21,22 +21,32 @@ pub struct DatabaseConfig {
 /// Instancia global perezosa de configuración, evaluada una sola vez.
 pub static CONFIG: Lazy<AppConfig> = Lazy::new(|| {
     let url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
-    let min = env::var("DATABASE_MIN_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
-    AppConfig { database: DatabaseConfig { url, min_connections: min } }
+    let min = env::var("DATABASE_MIN_CONNECTIONS").ok()
+                                                  .and_then(|v| v.parse().ok())
+                                                  .unwrap_or(2);
+    AppConfig { database: DatabaseConfig { url,
+                                           min_connections: min } }
 });
-use sqlx::postgres::PgPoolOptions;
 use sqlx::Executor;
+use sqlx::postgres::PgPoolOptions;
 /// Crea un pool de conexiones PostgreSQL basado en la configuración cargada.
 /// Devuelve un `Result` que permite propagar errores de conexión.
 pub async fn create_pool() -> Result<sqlx::Pool<sqlx::Postgres>, sqlx::Error> {
-    match PgPoolOptions::new().min_connections(CONFIG.database.min_connections).max_connections(10).connect(&CONFIG.database.url).await {
+    match PgPoolOptions::new().min_connections(CONFIG.database.min_connections)
+                              .max_connections(10)
+                              .connect(&CONFIG.database.url)
+                              .await
+    {
         Ok(pool) => Ok(pool),
         Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("3D000") => {
             // Database does not exist; attempt to create it.
             eprintln!("Target database not found. Attempting to create it...");
             ensure_database_exists(&CONFIG.database.url).await?;
             // Retry connection after creation
-            PgPoolOptions::new().min_connections(CONFIG.database.min_connections).max_connections(10).connect(&CONFIG.database.url).await
+            PgPoolOptions::new().min_connections(CONFIG.database.min_connections)
+                                .max_connections(10)
+                                .connect(&CONFIG.database.url)
+                                .await
         }
         Err(e) => Err(e),
     }
@@ -49,7 +59,7 @@ async fn ensure_database_exists(full_url: &str) -> Result<(), sqlx::Error> {
     let (base, db_name) = if let Some(pos) = full_url.rfind('/') {
         let (b, tail) = full_url.split_at(pos);
         let db_part = &tail[1..]; // remove leading '/'
-                                  // Remove query if present
+        // Remove query if present
         let db_only = db_part.split('?').next().unwrap_or(db_part);
         (b.to_string(), db_only.to_string())
     } else {
@@ -60,12 +70,18 @@ async fn ensure_database_exists(full_url: &str) -> Result<(), sqlx::Error> {
     }
     // Build admin URL using 'postgres' maintenance DB (fallback to original if
     // already points there)
-    let admin_url = if base.ends_with("/postgres") || db_name == "postgres" { full_url.to_string() } else { format!("{}/postgres", base) };
+    let admin_url = if base.ends_with("/postgres") || db_name == "postgres" {
+        full_url.to_string()
+    } else {
+        format!("{}/postgres", base)
+    };
     // Connect to admin DB
     if let Ok(admin_pool) = PgPoolOptions::new().max_connections(1).connect(&admin_url).await {
         // Issue CREATE DATABASE IF NOT EXISTS (Postgres lacks IF NOT EXISTS for CREATE
         // DATABASE pre-15; emulate) We check pg_database first.
-        let exists: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pg_database WHERE datname = $1").bind(&db_name).fetch_one(&admin_pool).await?;
+        let exists: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pg_database WHERE datname = $1").bind(&db_name)
+                                                                                                  .fetch_one(&admin_pool)
+                                                                                                  .await?;
         if exists.0 == 0 {
             // Safe identifier quoting minimal (no special chars assumed). For safety,
             // refuse suspicious names.

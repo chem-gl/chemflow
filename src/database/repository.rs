@@ -38,7 +38,9 @@ fn canonical_json(v: &serde_json::Value) -> String {
         serde_json::Value::Object(map) => {
             let mut keys: Vec<_> = map.keys().collect();
             keys.sort();
-            let inner: Vec<String> = keys.into_iter().map(|k| format!("\"{}\":{}", k, canonical_json(&map[k]))).collect();
+            let inner: Vec<String> = keys.into_iter()
+                                         .map(|k| format!("\"{}\":{}", k, canonical_json(&map[k])))
+                                         .collect();
             format!("{{{}}}", inner.join(","))
         }
         serde_json::Value::Array(arr) => {
@@ -71,16 +73,24 @@ impl WorkflowExecutionRepository {
         }
         if let Some(pool) = &self.pool {
             self.ensure_core_schema(pool).await?;
-            // Calcular integrity_ok si no viene seteado (compara hash almacenado con hash recomputado de parámetros)
+            // Calcular integrity_ok si no viene seteado (compara hash almacenado con hash
+            // recomputado de parámetros)
             let integrity_status = execution.integrity_ok.unwrap_or_else(|| {
-                if let Some(h) = &execution.parameter_hash { h == &compute_sorted_hash(&execution.parameters) } else { true }
-            });
+                                                             if let Some(h) = &execution.parameter_hash {
+                                                                 h == &compute_sorted_hash(&execution.parameters)
+                                                             } else {
+                                                                 true
+                                                             }
+                                                         });
             // 2. Persistencia en PostgreSQL: la tabla workflow_step_executions debe existir
             //    (creada por migraciones). ON CONFLICT permite actualizar estado y
             //    parámetros si se re-ejecuta un step o cambia su estado (ej: Running ->
             //    Completed).
-                        let failure_message: Option<String> = match &execution.status { StepStatus::Failed(msg) => Some(msg.clone()), _ => None };
-                        let insert_res = sqlx::query(
+            let failure_message: Option<String> = match &execution.status {
+                StepStatus::Failed(msg) => Some(msg.clone()),
+                _ => None,
+            };
+            let insert_res = sqlx::query(
                                 "INSERT INTO workflow_step_executions (step_id, name, description, status, failure_message, parameters, providers_used, start_time, end_time, parameter_hash, root_execution_id, parent_step_id, branch_from_step_id, input_family_ids, input_snapshot, step_config, integrity_ok)
                                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
                                  ON CONFLICT (step_id) DO UPDATE SET \
@@ -125,8 +135,9 @@ impl WorkflowExecutionRepository {
              .await;
             if let Err(e) = insert_res {
                 // Si la columna input_snapshot aún no existe (BD antigua), reintentar sin ella.
-                if let Some(db_err) = e.as_database_error() { if db_err.code().map(|c| c == "42703").unwrap_or(false) {
-                    sqlx::query(
+                if let Some(db_err) = e.as_database_error() {
+                    if db_err.code().map(|c| c == "42703").unwrap_or(false) {
+                        sqlx::query(
                         "INSERT INTO workflow_step_executions (step_id, name, description, status, failure_message, parameters, providers_used, start_time, end_time, parameter_hash, root_execution_id, parent_step_id, branch_from_step_id, input_family_ids, step_config, integrity_ok)
                          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
                          ON CONFLICT (step_id) DO UPDATE SET \
@@ -167,7 +178,10 @@ impl WorkflowExecutionRepository {
                      .bind(integrity_status)
                      .execute(pool)
                      .await?;
-                } else { return Err(e.into()); }}
+                    } else {
+                        return Err(e.into());
+                    }
+                }
             }
         }
         Ok(())
@@ -175,16 +189,25 @@ impl WorkflowExecutionRepository {
     async fn ensure_core_schema(&self, pool: &sqlx::Pool<sqlx::Postgres>) -> Result<(), Box<dyn std::error::Error>> {
         // Creamos tablas críticas con IF NOT EXISTS para ser idempotente.
         // 0001
-    sqlx::query("CREATE TABLE IF NOT EXISTS workflow_step_executions ( step_id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, status TEXT NOT NULL, failure_message TEXT NULL, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, providers_used JSONB NOT NULL DEFAULT '[]'::jsonb, start_time TIMESTAMPTZ NOT NULL, end_time TIMESTAMPTZ NOT NULL, parameter_hash TEXT, input_snapshot JSONB, step_config JSONB, integrity_ok BOOLEAN )").execute(pool).await?;
-    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS failure_message TEXT").execute(pool).await;
+        sqlx::query("CREATE TABLE IF NOT EXISTS workflow_step_executions ( step_id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, status TEXT NOT NULL, failure_message TEXT NULL, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, providers_used JSONB NOT NULL DEFAULT '[]'::jsonb, start_time TIMESTAMPTZ NOT NULL, end_time TIMESTAMPTZ NOT NULL, parameter_hash TEXT, input_snapshot JSONB, step_config JSONB, integrity_ok BOOLEAN )").execute(pool).await?;
+        let _ =
+            sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS failure_message TEXT").execute(pool)
+                                                                                                             .await;
         // Añadir columnas nuevas para branching/lineage si no existen
-    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS root_execution_id UUID").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS parent_step_id UUID").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS branch_from_step_id UUID").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS input_family_ids JSONB").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS input_snapshot JSONB").execute(pool).await; // new snapshot column
-    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS step_config JSONB").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS integrity_ok BOOLEAN").execute(pool).await;
+        let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS root_execution_id UUID").execute(pool).await;
+        let _ =
+            sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS parent_step_id UUID").execute(pool)
+                                                                                                            .await;
+        let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS branch_from_step_id UUID").execute(pool).await;
+        let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS input_family_ids JSONB").execute(pool).await;
+        let _ =
+            sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS input_snapshot JSONB").execute(pool)
+                                                                                                             .await; // new snapshot column
+        let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS step_config JSONB").execute(pool)
+                                                                                                              .await;
+        let _ =
+            sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS integrity_ok BOOLEAN").execute(pool)
+                                                                                                             .await;
         sqlx::query("CREATE TABLE IF NOT EXISTS molecule_families ( id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, molecules JSONB NOT NULL DEFAULT '[]'::jsonb, properties JSONB NOT NULL DEFAULT '{}'::jsonb, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, provenance JSONB, frozen BOOLEAN NOT NULL DEFAULT FALSE, frozen_at TIMESTAMPTZ NULL, family_hash TEXT )").execute(pool).await?;
         // 0002 link
         sqlx::query("CREATE TABLE IF NOT EXISTS workflow_step_family ( step_id UUID NOT NULL REFERENCES workflow_step_executions(step_id) ON DELETE CASCADE, family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, PRIMARY KEY (step_id, family_id) )").execute(pool).await?;
@@ -195,7 +218,8 @@ impl WorkflowExecutionRepository {
         sqlx::query("CREATE TABLE IF NOT EXISTS molecules ( inchikey TEXT PRIMARY KEY, inchi TEXT NOT NULL, smiles TEXT NOT NULL, common_name TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now() )").execute(pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_molecules ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, molecule_inchikey TEXT NOT NULL REFERENCES molecules(inchikey) ON DELETE CASCADE, position INT NOT NULL DEFAULT 0, PRIMARY KEY (family_id, molecule_inchikey) )").execute(pool).await?;
         // Índices esenciales (idempotente)
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_status ON workflow_step_executions(status)").execute(pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_status ON workflow_step_executions(status)").execute(pool)
+                                                                                                              .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_start_time ON workflow_step_executions(start_time)").execute(pool).await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_family_properties_name ON molecule_family_properties(property_name)").execute(pool).await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_molecule_family_molecules_family ON molecule_family_molecules(family_id)").execute(pool).await?;
@@ -203,8 +227,8 @@ impl WorkflowExecutionRepository {
         // GIN optional
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_executions_providers_used_gin ON workflow_step_executions USING GIN (providers_used jsonb_path_ops)").execute(pool)
                                                                                                                                                                                .await; // ignorar fallo si extensión no disponible
-                                                                                                                                                                                       // Normalized property provenance tables (needed so upsert_family transaction
-                                                                                                                                                                                       // doesn't rollback if migrations not applied)
+        // Normalized property provenance tables (needed so upsert_family transaction
+        // doesn't rollback if migrations not applied)
         sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_providers ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, provider_type TEXT NOT NULL, provider_name TEXT NOT NULL, provider_version TEXT NOT NULL, execution_parameters JSONB NOT NULL DEFAULT '{}'::jsonb, execution_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, execution_id) )").execute(pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_steps ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, step_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, step_id) )").execute(pool).await?;
         Ok(())
@@ -217,7 +241,9 @@ impl WorkflowExecutionRepository {
     pub async fn upsert_family(&self, family: &MoleculeFamily) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
             // Debug: molecule count before
-            let before: Option<i64> = match sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool).await {
+            let before: Option<i64> = match sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool)
+                                                                                                         .await
+            {
                 Ok((c,)) => Some(c),
                 Err(_) => None,
             };
@@ -226,7 +252,9 @@ impl WorkflowExecutionRepository {
             // 1. Upsert de la familia primero (evita violar FK al insertar relaciones de
             //    moléculas).
             let inchikeys: Vec<&String> = family.molecules.iter().map(|m| &m.inchikey).collect();
-            eprintln!("[upsert_family] upserting family row {} (molecule_count={})", family.id, inchikeys.len());
+            eprintln!("[upsert_family] upserting family row {} (molecule_count={})",
+                      family.id,
+                      inchikeys.len());
             sqlx::query(
              "INSERT INTO molecule_families (id, name, description, molecules, properties, parameters, provenance, frozen, frozen_at, family_hash)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -246,7 +274,10 @@ impl WorkflowExecutionRepository {
             .await?;
             // 2. Upsert de moléculas + relaciones ahora que la fila de familia existe.
             for (idx, mol) in family.molecules.iter().enumerate() {
-                eprintln!("[upsert_family] inserting molecule {} ({}/{})", mol.inchikey, idx + 1, family.molecules.len());
+                eprintln!("[upsert_family] inserting molecule {} ({}/{})",
+                          mol.inchikey,
+                          idx + 1,
+                          family.molecules.len());
                 sqlx::query(
                             "INSERT INTO molecules (inchikey, inchi, smiles, common_name) VALUES ($1,$2,$3,$4)
                      ON CONFLICT (inchikey) DO UPDATE SET inchi = EXCLUDED.inchi, smiles = EXCLUDED.smiles, common_name = EXCLUDED.common_name, updated_at = now()",
@@ -265,7 +296,9 @@ impl WorkflowExecutionRepository {
                  .execute(&mut *tx)
                  .await?;
             }
-            eprintln!("[upsert_family] completed molecules link for family {} total={}", family.id, family.molecules.len());
+            eprintln!("[upsert_family] completed molecules link for family {} total={}",
+                      family.id,
+                      family.molecules.len());
             // 3. Propiedades (igual que antes) -> tabla flatten.
             for (prop_name, entry) in &family.properties {
                 for value in &entry.values {
@@ -306,8 +339,15 @@ impl WorkflowExecutionRepository {
                 }
             }
             tx.commit().await?;
-            if let (Some(bc), Ok((ac,))) = (before, sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool).await) {
-                eprintln!("[upsert_family] molecule count before={} after={} delta={} fam_id={}", bc, ac, ac - bc, family.id);
+            if let (Some(bc), Ok((ac,))) = (before,
+                                            sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool)
+                                                                                                         .await)
+            {
+                eprintln!("[upsert_family] molecule count before={} after={} delta={} fam_id={}",
+                          bc,
+                          ac,
+                          ac - bc,
+                          family.id);
             }
         }
         Ok(())
@@ -382,7 +422,8 @@ impl WorkflowExecutionRepository {
                     let pr = ProviderReference { provider_type: r.try_get("provider_type")?,
                                                  provider_name: r.try_get("provider_name")?,
                                                  provider_version: r.try_get("provider_version")?,
-                                                 execution_parameters: serde_json::from_value(r.try_get("execution_parameters")?)?,
+                                                 execution_parameters:
+                                                     serde_json::from_value(r.try_get("execution_parameters")?)?,
                                                  execution_id: r.try_get("execution_id")? };
                     prov_map.entry(property_name).or_default().push(pr);
                 }
@@ -397,7 +438,8 @@ impl WorkflowExecutionRepository {
                 for (prop_name, prop_entry) in family.properties.iter_mut() {
                     if let Some(provs) = prov_map.get(prop_name) {
                         // Evitar duplicados por execution_id
-                        let existing_ids: std::collections::HashSet<_> = prop_entry.providers.iter().map(|p| p.execution_id).collect();
+                        let existing_ids: std::collections::HashSet<_> =
+                            prop_entry.providers.iter().map(|p| p.execution_id).collect();
                         for pr in provs {
                             if !existing_ids.contains(&pr.execution_id) {
                                 prop_entry.providers.push(pr.clone());
@@ -441,7 +483,11 @@ impl WorkflowExecutionRepository {
         Ok(())
     }
     /// Inserta/actualiza resultados con tipo específico (result_type).
-    pub async fn upsert_step_results_typed(&self, step_id: Uuid, results: &HashMap<String, serde_json::Value>, result_type: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn upsert_step_results_typed(&self,
+                                           step_id: Uuid,
+                                           results: &HashMap<String, serde_json::Value>,
+                                           result_type: &str)
+                                           -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
             for (k, v) in results {
                 sqlx::query(
@@ -463,11 +509,17 @@ impl WorkflowExecutionRepository {
         let guard = self.in_memory.read().await;
         Ok(guard.get(&execution_id).cloned().unwrap_or_default())
     }
-    pub async fn get_step_execution(&self, execution_id: Uuid, step_index: usize) -> Result<StepExecutionInfo, Box<dyn std::error::Error>> {
+    pub async fn get_step_execution(&self,
+                                    execution_id: Uuid,
+                                    step_index: usize)
+                                    -> Result<StepExecutionInfo, Box<dyn std::error::Error>> {
         let all = self.get_execution(execution_id).await?;
         all.get(step_index).cloned().ok_or("Step not found".into())
     }
-    pub async fn save_step_execution_for_branch(&self, execution: &StepExecutionInfo, branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn save_step_execution_for_branch(&self,
+                                                execution: &StepExecutionInfo,
+                                                branch_id: Uuid)
+                                                -> Result<(), Box<dyn std::error::Error>> {
         // Se clona la ejecución y se altera el step_id para representar la rama.
         let mut cloned = execution.clone();
         cloned.step_id = branch_id; // treat branch as separate id for now
@@ -495,10 +547,15 @@ impl WorkflowExecutionRepository {
         collected.sort_by_key(|e| e.start_time);
         collected
     }
-    /// Verifica integridad recomputando hash de parámetros y comparando (solo in-memory).
+    /// Verifica integridad recomputando hash de parámetros y comparando (solo
+    /// in-memory).
     pub async fn verify_execution_integrity(&self, step_id: Uuid) -> Option<bool> {
-        if let Ok(entries) = self.get_execution(step_id).await && let Some(last) = entries.last() {
-            return last.parameter_hash.as_ref().map(|h| h == &compute_sorted_hash(&last.parameters));
+        if let Ok(entries) = self.get_execution(step_id).await
+           && let Some(last) = entries.last()
+        {
+            return last.parameter_hash
+                       .as_ref()
+                       .map(|h| h == &compute_sorted_hash(&last.parameters));
         }
         None
     }
@@ -506,7 +563,11 @@ impl WorkflowExecutionRepository {
     pub async fn build_branch_tree(&self, root_id: Uuid) -> serde_json::Value {
         let steps = self.get_steps_by_root(root_id).await;
         let mut children: HashMap<Uuid, Vec<&StepExecutionInfo>> = HashMap::new();
-        for s in &steps { if let Some(parent) = s.parent_step_id { children.entry(parent).or_default().push(s); } }
+        for s in &steps {
+            if let Some(parent) = s.parent_step_id {
+                children.entry(parent).or_default().push(s);
+            }
+        }
         fn build(node: &StepExecutionInfo, map: &HashMap<Uuid, Vec<&StepExecutionInfo>>) -> serde_json::Value {
             let kids = map.get(&node.step_id).cloned().unwrap_or_default();
             serde_json::json!({
@@ -519,7 +580,8 @@ impl WorkflowExecutionRepository {
         let roots: Vec<&StepExecutionInfo> = steps.iter().filter(|s| s.parent_step_id.is_none()).collect();
         serde_json::json!(roots.into_iter().map(|r| build(r, &children)).collect::<Vec<_>>())
     }
-    /// Lista valores de una propiedad (flatten) con su provider principal (primer provider registrado) filtrando opcionalmente por provider_name.
+    /// Lista valores de una propiedad (flatten) con su provider principal
+    /// (primer provider registrado) filtrando opcionalmente por provider_name.
     pub async fn list_property_values(&self, property: &str, provider_filter: Option<&str>) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
         if let Some(pool) = &self.pool {
@@ -546,7 +608,8 @@ impl WorkflowExecutionRepository {
         }
         out
     }
-    /// Exporta un reporte consolidado de un root_execution_id con pasos y familias.
+    /// Exporta un reporte consolidado de un root_execution_id con pasos y
+    /// familias.
     pub async fn export_workflow_report(&self, root_id: Uuid) -> serde_json::Value {
         let steps = self.get_steps_by_root(root_id).await;
         let tree = self.build_branch_tree(root_id).await;
@@ -567,9 +630,9 @@ mod tests {
     #[tokio::test]
     async fn test_repository_methods() {
         let repo = WorkflowExecutionRepository::new(true);
-    let execution_info = StepExecutionInfo { step_id: Uuid::new_v4(),
-                         step_name: "test".into(),
-                         step_description: "repo test".into(),
+        let execution_info = StepExecutionInfo { step_id: Uuid::new_v4(),
+                                                 step_name: "test".into(),
+                                                 step_description: "repo test".into(),
                                                  parameters: HashMap::new(),
                                                  parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
                                                  providers_used: Vec::new(),
@@ -579,10 +642,10 @@ mod tests {
                                                  root_execution_id: Uuid::new_v4(),
                                                  parent_step_id: None,
                                                  branch_from_step_id: None,
-                         input_family_ids: Vec::new(),
-                         input_snapshot: None,
-                         step_config: None,
-                         integrity_ok: None };
+                                                 input_family_ids: Vec::new(),
+                                                 input_snapshot: None,
+                                                 step_config: None,
+                                                 integrity_ok: None };
         // Test save_step_execution
         repo.save_step_execution(&execution_info).await.unwrap();
         // Test get_execution
@@ -618,9 +681,9 @@ mod repository_usage_tests {
     #[tokio::test]
     async fn test_repo_all_methods() {
         let repo = WorkflowExecutionRepository::new(true);
-    let info = StepExecutionInfo { step_id: Uuid::new_v4(),
-                       step_name: "test".into(),
-                       step_description: "repo usage".into(),
+        let info = StepExecutionInfo { step_id: Uuid::new_v4(),
+                                       step_name: "test".into(),
+                                       step_description: "repo usage".into(),
                                        parameters: HashMap::new(),
                                        parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
                                        providers_used: Vec::new(),

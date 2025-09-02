@@ -1,9 +1,9 @@
-use async_trait::async_trait;
-use serde_json::Value;
-use std::collections::HashMap;
 use crate::data::family::{MoleculeFamily, ProviderReference};
 use crate::molecule::Molecule;
 use crate::providers::molecule::traitmolecule::{MoleculeProvider, ParameterDefinition, ParameterType};
+use async_trait::async_trait;
+use serde_json::Value;
+use std::collections::HashMap;
 /// Provides a mock family of antioxidant seed molecules.
 pub struct AntioxidantSeedProvider;
 #[async_trait]
@@ -33,8 +33,11 @@ impl MoleculeProvider for AntioxidantSeedProvider {
                                        default_value: Some(Value::Array(vec![])) });
         m
     }
-    async fn get_molecule_family(&self, parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
-        let mut fam = MoleculeFamily::new("Antioxidant Seeds".into(), Some("Mocked reference antioxidant molecules".into()));
+    async fn get_molecule_family(&self,
+                                 parameters: &HashMap<String, Value>)
+                                 -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
+        let mut fam = MoleculeFamily::new("Antioxidant Seeds".into(),
+                                          Some("Mocked reference antioxidant molecules".into()));
         let include_phenolics = parameters.get("include_phenolics").and_then(|v| v.as_bool()).unwrap_or(true);
         if include_phenolics {
             for smi in ["O=CC1=CC=CC(O)=C1O", "CC1=C(O)C=C(O)C=C1O", "C1=CC(=CC=C1O)O"] {
@@ -51,11 +54,18 @@ impl MoleculeProvider for AntioxidantSeedProvider {
             }
         }
         fam.provenance = Some(crate::data::family::FamilyProvenance { created_in_step: None,
-                                                                      creation_provider: Some(ProviderReference { provider_type: "molecule".into(),
-                                                                                                                  provider_name: self.get_name().into(),
-                                                                                                                  provider_version: self.get_version().into(),
-                                                                                                                  execution_parameters: parameters.clone(),
-                                                                                                                  execution_id: uuid::Uuid::new_v4() }) });
+                                                                      creation_provider:
+                                                                          Some(ProviderReference { provider_type:
+                                                                                                       "molecule".into(),
+                                                                                                   provider_name:
+                                                                                                       self.get_name().into(),
+                                                                                                   provider_version:
+                                                                                                       self.get_version()
+                                                                                                           .into(),
+                                                                                                   execution_parameters:
+                                                                                                       parameters.clone(),
+                                                                                                   execution_id:
+                                                                                                       uuid::Uuid::new_v4() }) });
         Ok(fam)
     }
 }

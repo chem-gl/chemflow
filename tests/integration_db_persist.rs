@@ -23,11 +23,15 @@ async fn test_persist_molecules_and_snapshot() {
                                          description: "Acquire".into(),
                                          provider_name: "test_molecule".into(),
                                          parameters: HashMap::from([("count".into(), json!(3))]) };
-    let out = manager.execute_step(&step, vec![], step.parameters.clone()).await.expect("execute");
+    let out = manager.execute_step(&step, vec![], step.parameters.clone())
+                     .await
+                     .expect("execute");
     assert_eq!(out.families.len(), 1);
     // Query DB counts
     let pool_ref = manager.repository().pool().unwrap();
-    let (mol_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM molecules").fetch_one(pool_ref).await.unwrap();
+    let (mol_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM molecules").fetch_one(pool_ref)
+                                                                               .await
+                                                                               .unwrap();
     assert!(mol_count >= 3, "Expected at least 3 molecules persisted, got {}", mol_count);
     // Snapshot result presence
     let (snap_exists,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM workflow_step_results WHERE step_id = $1 AND result_key = 'snapshot_molecule_counts'").bind(out.execution_info.step_id)

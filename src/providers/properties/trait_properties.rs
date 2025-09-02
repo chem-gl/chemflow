@@ -3,11 +3,11 @@
 //! devolviendo vectores de datos (ej. LogP) con información temporal y de
 //! fuente. La trazabilidad se logra registrando proveedor, versión y parámetros
 //! en cada `FamilyProperty` cuando el step correspondiente invoca al provider.
+use crate::data::family::MoleculeFamily;
+use crate::data::types::LogPData;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::data::family::MoleculeFamily;
-use crate::data::types::LogPData;
 #[async_trait]
 pub trait PropertiesProvider: Send + Sync {
     fn get_name(&self) -> &str;
@@ -15,12 +15,15 @@ pub trait PropertiesProvider: Send + Sync {
     fn get_description(&self) -> &str;
     fn get_supported_properties(&self) -> Vec<String>;
     fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition>;
-    async fn calculate_properties(&self, molecule_family: &MoleculeFamily, parameters: &HashMap<String, Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>>;
+    async fn calculate_properties(&self,
+                                  molecule_family: &MoleculeFamily,
+                                  parameters: &HashMap<String, Value>)
+                                  -> Result<Vec<LogPData>, Box<dyn std::error::Error>>;
 }
 #[cfg(test)]
 mod more_properties_provider_tests {
-    use chrono::Utc;
     use super::*;
+    use chrono::Utc;
     struct AdvancedProvider;
     #[async_trait]
     impl PropertiesProvider for AdvancedProvider {
@@ -52,7 +55,10 @@ mod more_properties_provider_tests {
                                                 default_value: Some(Value::String("default".to_string())) });
             params
         }
-        async fn calculate_properties(&self, _molecule_family: &MoleculeFamily, _parameters: &HashMap<String, Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
+        async fn calculate_properties(&self,
+                                      _molecule_family: &MoleculeFamily,
+                                      _parameters: &HashMap<String, Value>)
+                                      -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
             // Return two data points: one frozen and one not, all with source "advanced"
             Ok(vec![LogPData { value: 1.2,
                                source: "advanced".to_string(),
@@ -168,10 +174,14 @@ mod tests {
                                                 description: "Test parameter".to_string(),
                                                 data_type: ParameterType::Number,
                                                 required: false,
-                                                default_value: Some(Value::Number(serde_json::Number::from_f64(1.0).unwrap())) });
+                                                default_value:
+                                                    Some(Value::Number(serde_json::Number::from_f64(1.0).unwrap())) });
             params
         }
-        async fn calculate_properties(&self, _molecule_family: &MoleculeFamily, _parameters: &HashMap<String, Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
+        async fn calculate_properties(&self,
+                                      _molecule_family: &MoleculeFamily,
+                                      _parameters: &HashMap<String, Value>)
+                                      -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
             Ok(vec![LogPData { value: 2.0,
                                source: "test".to_string(),
                                frozen: false,
@@ -237,7 +247,10 @@ mod trait_properties_usage_tests {
         fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition> {
             HashMap::new()
         }
-        async fn calculate_properties(&self, _molecule_family: &crate::data::family::MoleculeFamily, _parameters: &HashMap<String, serde_json::Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
+        async fn calculate_properties(&self,
+                                      _molecule_family: &crate::data::family::MoleculeFamily,
+                                      _parameters: &HashMap<String, serde_json::Value>)
+                                      -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
             Ok(vec![])
         }
     }

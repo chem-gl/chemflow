@@ -39,7 +39,11 @@ impl<'a> FlowSession<'a> {
     }
     fn maybe_branch(&mut self, logical: &'static str, params: &HashMap<String, Value>) {
         let hash = crate::database::repository::compute_sorted_hash(params);
-        if let Some(prev_step_id) = self.last_params_hash.get(logical).filter(|prev_hash| *prev_hash != &hash).and_then(|_| self.last_step_ids.get(logical)) {
+        if let Some(prev_step_id) = self.last_params_hash
+                                        .get(logical)
+                                        .filter(|prev_hash| *prev_hash != &hash)
+                                        .and_then(|_| self.last_step_ids.get(logical))
+        {
             self.manager.create_branch(*prev_step_id);
         }
         self.last_params_hash.insert(logical, hash);
@@ -79,7 +83,8 @@ impl<'a> FlowSession<'a> {
     }
     pub async fn step3_aggregate(&mut self) -> Result<Uuid, Box<dyn std::error::Error>> {
         self.require(&["step1", "step2"])?;
-        let params: HashMap<String, Value> = HashMap::from([("data_provider".into(), Value::String("antiox_aggregate".into()))]);
+        let params: HashMap<String, Value> =
+            HashMap::from([("data_provider".into(), Value::String("antiox_aggregate".into()))]);
         self.maybe_branch("step3", &params);
         let step = DataAggregationStep { id: Uuid::new_v4(),
                                          name: "Step3:Aggregate".into(),

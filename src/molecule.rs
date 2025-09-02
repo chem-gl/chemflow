@@ -17,7 +17,10 @@ pub struct Molecule {
 }
 impl Molecule {
     pub fn new(inchikey: String, smiles: String, inchi: String, common_name: Option<String>) -> Self {
-        Self { inchikey, smiles, inchi, common_name }
+        Self { inchikey,
+               smiles,
+               inchi,
+               common_name }
     }
     /// Construye una molécula a partir de una cadena SMILES.
     /// (Placeholder: la validación real química se debe implementar más
@@ -25,7 +28,10 @@ impl Molecule {
     pub fn from_smiles(smiles: String) -> Result<Self, Box<dyn std::error::Error>> {
         let inchikey = format!("{}_key", smiles); // Placeholder
         let inchi = format!("InChI=1S/{}", smiles); // Placeholder
-        Ok(Self { inchikey, smiles, inchi, common_name: None })
+        Ok(Self { inchikey,
+                  smiles,
+                  inchi,
+                  common_name: None })
     }
 }
 #[cfg(test)]
@@ -33,7 +39,10 @@ mod tests {
     use super::Molecule;
     #[test]
     fn test_molecule_new() {
-        let m = Molecule::new("TESTKEY".to_string(), "C1=CC=CC=C1".to_string(), "InChI=1S/C1=CC=CC=C1".to_string(), Some("Benzene".to_string()));
+        let m = Molecule::new("TESTKEY".to_string(),
+                              "C1=CC=CC=C1".to_string(),
+                              "InChI=1S/C1=CC=CC=C1".to_string(),
+                              Some("Benzene".to_string()));
         assert_eq!(m.inchikey, "TESTKEY");
         assert_eq!(m.smiles, "C1=CC=CC=C1");
         assert_eq!(m.inchi, "InChI=1S/C1=CC=CC=C1");

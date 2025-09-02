@@ -1,8 +1,8 @@
+use crate::data::family::MoleculeFamily;
+use crate::providers::data::trait_dataprovider::{DataParameterDefinition, DataParameterType, DataProvider};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::data::family::MoleculeFamily;
-use crate::providers::data::trait_dataprovider::{DataParameterDefinition, DataParameterType, DataProvider};
 /// Aggregates antioxidant activity statistics across families.
 pub struct AntioxidantAggregateProvider;
 #[async_trait]
@@ -26,7 +26,10 @@ impl DataProvider for AntioxidantAggregateProvider {
                                            default_value: Some(Value::Number(0.into())) });
         m
     }
-    async fn calculate(&self, families: &[MoleculeFamily], params: &HashMap<String, Value>) -> Result<Value, Box<dyn std::error::Error>> {
+    async fn calculate(&self,
+                       families: &[MoleculeFamily],
+                       params: &HashMap<String, Value>)
+                       -> Result<Value, Box<dyn std::error::Error>> {
         let min = params.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let mut values = Vec::new();
         for fam in families {

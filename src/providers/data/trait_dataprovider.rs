@@ -4,10 +4,10 @@
 //! en una o múltiples `MoleculeFamily` de entrada. Su resultado puede ser
 //! almacenado como parte de `StepOutput.results` conservando parámetros usados
 //! para reproducibilidad.
+use crate::data::family::MoleculeFamily;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::data::family::MoleculeFamily;
 #[async_trait]
 pub trait DataProvider: Send + Sync {
     fn get_name(&self) -> &str;
@@ -18,7 +18,10 @@ pub trait DataProvider: Send + Sync {
     /// `Value` JSON para permitir esquemas flexibles. El JSON debería
     /// contener suficiente estructura para mantener trazabilidad (ej.
     /// listas de IDs, versión de algoritmo, etc.).
-    async fn calculate(&self, families: &[MoleculeFamily], parameters: &HashMap<String, Value>) -> Result<Value, Box<dyn std::error::Error>>;
+    async fn calculate(&self,
+                       families: &[MoleculeFamily],
+                       parameters: &HashMap<String, Value>)
+                       -> Result<Value, Box<dyn std::error::Error>>;
 }
 #[derive(Debug, Clone)]
 pub struct DataParameterDefinition {
@@ -54,7 +57,10 @@ mod tests {
         fn get_available_parameters(&self) -> HashMap<String, DataParameterDefinition> {
             HashMap::new()
         }
-        async fn calculate(&self, families: &[MoleculeFamily], _p: &HashMap<String, Value>) -> Result<Value, Box<dyn std::error::Error>> {
+        async fn calculate(&self,
+                           families: &[MoleculeFamily],
+                           _p: &HashMap<String, Value>)
+                           -> Result<Value, Box<dyn std::error::Error>> {
             let total: usize = families.iter().map(|f| f.molecules.len()).sum();
             Ok(Value::Number(serde_json::Number::from(total)))
         }

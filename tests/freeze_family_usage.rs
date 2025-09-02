@@ -10,6 +10,6 @@ async fn test_freeze_family_noop_in_memory() {
     // Simulate a hash-freeze call path (will just early return because get_family
     // finds None)
     let _ = repo.freeze_family(Uuid::new_v4()).await; // should be Ok
-                                                      // Ensure calling on a non-existent id does not error
+    // Ensure calling on a non-existent id does not error
     assert!(fam.family_hash.is_none());
 }

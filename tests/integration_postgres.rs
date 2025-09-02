@@ -37,12 +37,13 @@ impl WorkflowStep for AggregationLikeStep {
     async fn execute(&self,
                      _input: StepInput,
                      _m: &HashMap<String, Box<dyn chemflow_rust::providers::molecule::traitmolecule::MoleculeProvider>>,
-                     _p: &HashMap<String, Box<dyn chemflow_rust::providers::properties::trait_properties::PropertiesProvider>>,
+                     _p: &HashMap<String,
+                              Box<dyn chemflow_rust::providers::properties::trait_properties::PropertiesProvider>>,
                      _d: &HashMap<String, Box<dyn chemflow_rust::providers::data::trait_dataprovider::DataProvider>>)
                      -> Result<StepOutput, Box<dyn std::error::Error>> {
         let mut results = HashMap::new();
         results.insert("aggregation".to_string(), serde_json::json!({"count":0}));
-    Ok(StepOutput { families: vec![],
+        Ok(StepOutput { families: vec![],
             results,
             execution_info: StepExecutionInfo { step_id: self.id,
                                 step_name: self.get_name().to_string(),

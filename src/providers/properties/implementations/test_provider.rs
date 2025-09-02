@@ -1,9 +1,9 @@
-use async_trait::async_trait;
-use serde_json::Value;
-use std::collections::HashMap;
 use crate::data::family::MoleculeFamily;
 use crate::data::types::LogPData;
 use crate::providers::properties::trait_properties::{ParameterDefinition, ParameterType, PropertiesProvider};
+use async_trait::async_trait;
+use serde_json::Value;
+use std::collections::HashMap;
 pub struct TestPropertiesProvider;
 impl TestPropertiesProvider {
     pub fn new() -> Self {
@@ -39,8 +39,13 @@ impl PropertiesProvider for TestPropertiesProvider {
                                             default_value: Some(Value::String("test_method".to_string())) });
         params
     }
-    async fn calculate_properties(&self, molecule_family: &MoleculeFamily, parameters: &HashMap<String, Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
-        let method = parameters.get("calculation_method").and_then(|v| v.as_str()).unwrap_or("test_method");
+    async fn calculate_properties(&self,
+                                  molecule_family: &MoleculeFamily,
+                                  parameters: &HashMap<String, Value>)
+                                  -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
+        let method = parameters.get("calculation_method")
+                               .and_then(|v| v.as_str())
+                               .unwrap_or("test_method");
         let mut results = Vec::new();
         for molecule in &molecule_family.molecules {
             let logp_value = molecule.smiles.len() as f64 * 0.1;

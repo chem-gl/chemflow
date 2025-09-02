@@ -12,11 +12,11 @@
 //! - Evitar dependencia directa entre propiedades y steps: las propiedades son
 //!   independientes del step y sólo registran proveedor + parámetros,
 //!   permitiendo reutilización en diferentes workflows / ramas.
+use crate::data::types::LogPData;
+use crate::molecule::Molecule;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use crate::data::types::LogPData;
-use crate::molecule::Molecule;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoleculeFamily {
     pub id: Uuid,
@@ -72,7 +72,11 @@ impl MoleculeFamily {
                family_hash: None }
     }
     /// Attach a property with complete traceability information.
-    pub fn add_property(&mut self, property_name: impl Into<String>, data: Vec<LogPData>, provider_reference: ProviderReference, step_id: Option<Uuid>) {
+    pub fn add_property(&mut self,
+                        property_name: impl Into<String>,
+                        data: Vec<LogPData>,
+                        provider_reference: ProviderReference,
+                        step_id: Option<Uuid>) {
         let key = property_name.into();
         self.properties
             .entry(key)

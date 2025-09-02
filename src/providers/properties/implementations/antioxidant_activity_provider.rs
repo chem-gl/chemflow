@@ -1,10 +1,10 @@
+use crate::data::family::MoleculeFamily;
+use crate::data::types::LogPData;
+use crate::providers::properties::trait_properties::{ParameterDefinition, ParameterType, PropertiesProvider};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::data::family::MoleculeFamily;
-use crate::data::types::LogPData;
-use crate::providers::properties::trait_properties::{ParameterDefinition, ParameterType, PropertiesProvider};
 /// Mock provider generating antioxidant activity scores per molecule.
 pub struct AntioxidantActivityPropertiesProvider;
 #[async_trait]
@@ -37,7 +37,10 @@ impl PropertiesProvider for AntioxidantActivityPropertiesProvider {
                                        default_value: Some(Value::String("std".into())) });
         m
     }
-    async fn calculate_properties(&self, family: &MoleculeFamily, _parameters: &HashMap<String, Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
+    async fn calculate_properties(&self,
+                                  family: &MoleculeFamily,
+                                  _parameters: &HashMap<String, Value>)
+                                  -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
         Ok(family.molecules
                  .iter()
                  .enumerate()
