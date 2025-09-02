@@ -4,8 +4,8 @@
 //! o generando moléculas sintéticas). Los parámetros y metadatos se registrarán
 //! en el step que invoque al proveedor para trazabilidad y branching.
 use async_trait::async_trait;
-use std::collections::HashMap;
 use serde_json::Value;
+use std::collections::HashMap;
 
 use crate::data::family::MoleculeFamily;
 
@@ -15,14 +15,11 @@ pub trait MoleculeProvider: Send + Sync {
     fn get_version(&self) -> &str;
     fn get_description(&self) -> &str;
     fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition>;
-    
+
     /// Construye una nueva familia de moléculas usando los parámetros
     /// (ya validados externamente). Debe devolver una familia autocontenida
     /// con `source_provider` apropiado agregado posteriormente por el step.
-    async fn get_molecule_family(
-        &self,
-        parameters: &HashMap<String, Value>,
-    ) -> Result<MoleculeFamily, Box<dyn std::error::Error>>;
+    async fn get_molecule_family(&self, parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>>;
 }
 
 #[derive(Debug, Clone)]
@@ -44,13 +41,11 @@ pub enum ParameterType {
 }
 
 fn _use_molecule_params() {
-    let pd = ParameterDefinition {
-        name: String::new(),
-        description: String::new(),
-        data_type: ParameterType::String,
-        required: false,
-        default_value: None,
-    };
+    let pd = ParameterDefinition { name: String::new(),
+                                   description: String::new(),
+                                   data_type: ParameterType::String,
+                                   required: false,
+                                   default_value: None };
     // Access all fields
     let _ = &pd.name;
     let _ = &pd.description;
@@ -77,31 +72,27 @@ mod tests {
         fn get_name(&self) -> &str {
             "Test Provider"
         }
-        
+
         fn get_version(&self) -> &str {
             "1.0.0"
         }
-        
+
         fn get_description(&self) -> &str {
             "Test molecule provider"
         }
-        
+
         fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition> {
             let mut params = HashMap::new();
-            params.insert("param1".to_string(), ParameterDefinition {
-                name: "param1".to_string(),
-                description: "Test parameter".to_string(),
-                data_type: ParameterType::String,
-                required: true,
-                default_value: Some(Value::String("default".to_string())),
-            });
+            params.insert("param1".to_string(),
+                          ParameterDefinition { name: "param1".to_string(),
+                                                description: "Test parameter".to_string(),
+                                                data_type: ParameterType::String,
+                                                required: true,
+                                                default_value: Some(Value::String("default".to_string())) });
             params
         }
-        
-        async fn get_molecule_family(
-            &self,
-            _parameters: &HashMap<String, Value>,
-        ) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
+
+        async fn get_molecule_family(&self, _parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
             Ok(MoleculeFamily::new("Test".to_string(), None))
         }
     }
@@ -109,25 +100,23 @@ mod tests {
     #[test]
     fn test_molecule_provider_methods() {
         let provider = TestMoleculeProvider;
-        
+
         // Call all methods
         assert_eq!(provider.get_name(), "Test Provider");
         assert_eq!(provider.get_version(), "1.0.0");
         assert_eq!(provider.get_description(), "Test molecule provider");
-        
+
         let params = provider.get_available_parameters();
         assert!(params.contains_key("param1"));
     }
 
     #[test]
     fn test_parameter_definition_fields() {
-        let param_def = ParameterDefinition {
-            name: "test_param".to_string(),
-            description: "Test description".to_string(),
-            data_type: ParameterType::String,
-            required: false,
-            default_value: Some(Value::Bool(true)),
-        };
+        let param_def = ParameterDefinition { name: "test_param".to_string(),
+                                              description: "Test description".to_string(),
+                                              data_type: ParameterType::String,
+                                              required: false,
+                                              default_value: Some(Value::Bool(true)) };
 
         // Access all fields
         assert_eq!(param_def.name, "test_param");
@@ -157,18 +146,26 @@ mod traitmolecule_usage_tests {
 
     #[async_trait]
     impl MoleculeProvider for DummyMoleculeProv {
-        fn get_name(&self) -> &str { "dummy" }
-        fn get_version(&self) -> &str { "0.0" }
-        fn get_description(&self) -> &str { "desc" }
+        fn get_name(&self) -> &str {
+            "dummy"
+        }
+        fn get_version(&self) -> &str {
+            "0.0"
+        }
+        fn get_description(&self) -> &str {
+            "desc"
+        }
         fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition> {
             let mut m = HashMap::new();
-            m.insert("x".to_string(), ParameterDefinition { name: "x".to_string(), description: "d".to_string(), data_type: ParameterType::Number, required: true, default_value: None });
+            m.insert("x".to_string(),
+                     ParameterDefinition { name: "x".to_string(),
+                                           description: "d".to_string(),
+                                           data_type: ParameterType::Number,
+                                           required: true,
+                                           default_value: None });
             m
         }
-        async fn get_molecule_family(
-            &self,
-            _parameters: &HashMap<String, serde_json::Value>
-        ) -> Result<crate::data::family::MoleculeFamily, Box<dyn std::error::Error>> {
+        async fn get_molecule_family(&self, _parameters: &HashMap<String, serde_json::Value>) -> Result<crate::data::family::MoleculeFamily, Box<dyn std::error::Error>> {
             Ok(crate::data::family::MoleculeFamily::new("n".to_string(), None))
         }
     }
@@ -185,12 +182,16 @@ mod traitmolecule_usage_tests {
 
     #[test]
     fn test_parameter_definition_and_types() {
-        let pd = ParameterDefinition { name: "n".to_string(), description: "d".to_string(), data_type: ParameterType::Boolean, required: false, default_value: None };
+        let pd = ParameterDefinition { name: "n".to_string(),
+                                       description: "d".to_string(),
+                                       data_type: ParameterType::Boolean,
+                                       required: false,
+                                       default_value: None };
         assert_eq!(pd.name, "n");
         assert_eq!(pd.description, "d");
         assert!(!pd.required);
         match pd.data_type {
-            ParameterType::Boolean => {},
+            ParameterType::Boolean => {}
             _ => panic!(),
         }
         // Use all variants

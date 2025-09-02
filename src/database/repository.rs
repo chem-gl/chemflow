@@ -1,26 +1,31 @@
 //! Repositorio de persistencia para ejecuciones de steps y familias.
 //! Proporciona almacenamiento en memoria (rápido para tests y prototipos) y, si
 //! se inicializa con un pool PostgreSQL, persiste también en base de datos.
-//! 
+//!
 //! Responsabilidades clave:
-//! - Guardar metadatos de ejecución (StepExecutionInfo) con parámetros y proveedores.
+//! - Guardar metadatos de ejecución (StepExecutionInfo) con parámetros y
+//!   proveedores.
 //! - Upsert de familias de moléculas con sus propiedades y proveedor fuente.
-//! - Guardar relación many-to-many step <-> familia para reconstruir flujos e historial.
-//! - Recuperar familias y ejecuciones por ID, así como filtrar por root_execution_id
-//!   para reconstruir un árbol/linaje completo, incluyendo ramas.
-//! - Soporte para branching mediante duplicación controlada de step_id en ramas (save_step_execution_for_branch).
+//! - Guardar relación many-to-many step <-> familia para reconstruir flujos e
+//!   historial.
+//! - Recuperar familias y ejecuciones por ID, así como filtrar por
+//!   root_execution_id para reconstruir un árbol/linaje completo, incluyendo
+//!   ramas.
+//! - Soporte para branching mediante duplicación controlada de step_id en ramas
+//!   (save_step_execution_for_branch).
 //!
 //! Notas de Trazabilidad:
 //! Cada propiedad almacenada en una familia lleva un ProviderReference que
 //! señala proveedor, versión, parámetros de ejecución y execution_id único.
-//! Esto permite auditoría y reproducibilidad independiente del step que la generó.
-use std::collections::HashMap;
-use uuid::Uuid;
-use crate::workflow::step::{StepExecutionInfo, StepStatus};
+//! Esto permite auditoría y reproducibilidad independiente del step que la
+//! generó.
 use crate::data::family::{MoleculeFamily, ProviderReference};
 use crate::molecule::Molecule;
+use crate::workflow::step::{StepExecutionInfo, StepStatus};
+use sha2::{Digest, Sha256};
 use sqlx::Row; // Para acceso dinámico a columnas al usar sqlx::query en lugar de query! macro
-use sha2::{Sha256, Digest};
+use std::collections::HashMap;
+use uuid::Uuid;
 
 pub fn compute_sorted_hash<T: serde::Serialize>(value: &T) -> String {
     let json = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
@@ -54,47 +59,50 @@ pub struct WorkflowExecutionRepository {
 
 impl WorkflowExecutionRepository {
     pub fn new(_in_memory_only: bool) -> Self {
-        Self {
-            in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pool: None, // in-memory only (placeholder for future pool wiring using flag)
-        }
+        Self { in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+               pool: None /* in-memory only (placeholder for future pool wiring using flag) */ }
     }
 
     pub async fn with_pool(pool: sqlx::Pool<sqlx::Postgres>) -> Self {
-        Self {
-            in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pool: Some(pool),
-        }
+        Self { in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+               pool: Some(pool) }
     }
 
     pub async fn save_step_execution(&self, execution: &StepExecutionInfo) -> Result<(), Box<dyn std::error::Error>> {
-        // 1. Siempre guarda en memoria para acceso rápido (cache de sesiones / pruebas).
+        // 1. Siempre guarda en memoria para acceso rápido (cache de sesiones /
+        //    pruebas).
         {
             let mut guard = self.in_memory.write().await;
             guard.entry(execution.step_id).or_default().push(execution.clone());
         }
         if let Some(pool) = &self.pool {
-            // Asegura que las tablas básicas existan (defensa ante BD recién creada sin migraciones aplicadas).
+            // Asegura que las tablas básicas existan (defensa ante BD recién creada sin
+            // migraciones aplicadas).
             self.ensure_core_schema(pool).await?;
             // 2. Persistencia en PostgreSQL: la tabla workflow_step_executions debe existir
-            //    (creada por migraciones). ON CONFLICT permite actualizar estado y parámetros
-            //    si se re-ejecuta un step o cambia su estado (ej: Running -> Completed).
+            //    (creada por migraciones). ON CONFLICT permite actualizar estado y
+            //    parámetros si se re-ejecuta un step o cambia su estado (ej: Running ->
+            //    Completed).
             sqlx::query(
-             "INSERT INTO workflow_step_executions (step_id, name, description, status, parameters, providers_used, start_time, end_time, parameter_hash)
+                        "INSERT INTO workflow_step_executions (step_id, name, description, status, parameters, providers_used, start_time, end_time, parameter_hash)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-              ON CONFLICT (step_id) DO UPDATE SET status = EXCLUDED.status, end_time = EXCLUDED.end_time, parameters = EXCLUDED.parameters, providers_used = EXCLUDED.providers_used, parameter_hash = EXCLUDED.parameter_hash"
-            )
-            .bind(execution.step_id)
-            .bind("step") // placeholder name (extend model to include name/description later)
-            .bind("")
-            .bind(match &execution.status { StepStatus::Pending => "Pending", StepStatus::Running => "Running", StepStatus::Completed => "Completed", StepStatus::Failed(_) => "Failed" })
-            .bind(serde_json::to_value(&execution.parameters)?)
-            .bind(serde_json::to_value(&execution.providers_used)?)
-            .bind(execution.start_time)
-          .bind(execution.end_time)
-          .bind(&execution.parameter_hash)
-            .execute(pool)
-            .await?;
+              ON CONFLICT (step_id) DO UPDATE SET status = EXCLUDED.status, end_time = EXCLUDED.end_time, parameters = EXCLUDED.parameters, providers_used = EXCLUDED.providers_used, parameter_hash = EXCLUDED.parameter_hash",
+            ).bind(execution.step_id)
+             .bind("step") // placeholder name (extend model to include name/description later)
+             .bind("")
+             .bind(match &execution.status {
+                       StepStatus::Pending => "Pending",
+                       StepStatus::Running => "Running",
+                       StepStatus::Completed => "Completed",
+                       StepStatus::Failed(_) => "Failed",
+                   })
+             .bind(serde_json::to_value(&execution.parameters)?)
+             .bind(serde_json::to_value(&execution.providers_used)?)
+             .bind(execution.start_time)
+             .bind(execution.end_time)
+             .bind(&execution.parameter_hash)
+             .execute(pool)
+             .await?;
         }
         Ok(())
     }
@@ -103,7 +111,7 @@ impl WorkflowExecutionRepository {
         // Creamos tablas críticas con IF NOT EXISTS para ser idempotente.
         // 0001
         sqlx::query("CREATE TABLE IF NOT EXISTS workflow_step_executions ( step_id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, status TEXT NOT NULL, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, providers_used JSONB NOT NULL DEFAULT '[]'::jsonb, start_time TIMESTAMPTZ NOT NULL, end_time TIMESTAMPTZ NOT NULL, parameter_hash TEXT )").execute(pool).await?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS molecule_families ( id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, molecules JSONB NOT NULL DEFAULT '[]'::jsonb, properties JSONB NOT NULL DEFAULT '{}'::jsonb, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, provenance JSONB, frozen BOOLEAN NOT NULL DEFAULT FALSE, frozen_at TIMESTAMPTZ NULL, family_hash TEXT )").execute(pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS molecule_families ( id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, molecules JSONB NOT NULL DEFAULT '[]'::jsonb, properties JSONB NOT NULL DEFAULT '{}'::jsonb, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, provenance JSONB, frozen BOOLEAN NOT NULL DEFAULT FALSE, frozen_at TIMESTAMPTZ NULL, family_hash TEXT )").execute(pool).await?;
         // 0002 link
         sqlx::query("CREATE TABLE IF NOT EXISTS workflow_step_family ( step_id UUID NOT NULL REFERENCES workflow_step_executions(step_id) ON DELETE CASCADE, family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, PRIMARY KEY (step_id, family_id) )").execute(pool).await?;
         // 0003 properties & results
@@ -119,51 +127,34 @@ impl WorkflowExecutionRepository {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_molecule_family_molecules_family ON molecule_family_molecules(family_id)").execute(pool).await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_molecule_family_molecules_inchikey ON molecule_family_molecules(molecule_inchikey)").execute(pool).await?;
         // GIN optional
-        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_executions_providers_used_gin ON workflow_step_executions USING GIN (providers_used jsonb_path_ops)").execute(pool).await; // ignorar fallo si extensión no disponible
-    // Normalized property provenance tables (needed so upsert_family transaction doesn't rollback if migrations not applied)
-    sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_providers ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, provider_type TEXT NOT NULL, provider_name TEXT NOT NULL, provider_version TEXT NOT NULL, execution_parameters JSONB NOT NULL DEFAULT '{}'::jsonb, execution_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, execution_id) )").execute(pool).await?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_steps ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, step_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, step_id) )").execute(pool).await?;
+        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_executions_providers_used_gin ON workflow_step_executions USING GIN (providers_used jsonb_path_ops)").execute(pool)
+                                                                                                                                                                               .await; // ignorar fallo si extensión no disponible
+                                                                                                                                                                                       // Normalized property provenance tables (needed so upsert_family transaction
+                                                                                                                                                                                       // doesn't rollback if migrations not applied)
+        sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_providers ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, provider_type TEXT NOT NULL, provider_name TEXT NOT NULL, provider_version TEXT NOT NULL, execution_parameters JSONB NOT NULL DEFAULT '{}'::jsonb, execution_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, execution_id) )").execute(pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_steps ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, step_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, step_id) )").execute(pool).await?;
         Ok(())
     }
 
-    /// Acceso de solo lectura al pool (principalmente para tests de integración).
-    pub fn pool(&self) -> Option<&sqlx::Pool<sqlx::Postgres>> { self.pool.as_ref() }
+    /// Acceso de solo lectura al pool (principalmente para tests de
+    /// integración).
+    pub fn pool(&self) -> Option<&sqlx::Pool<sqlx::Postgres>> {
+        self.pool.as_ref()
+    }
 
     pub async fn upsert_family(&self, family: &MoleculeFamily) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
             // Debug: molecule count before
-            let before: Option<i64> = match sqlx::query_as::<_, (i64,)> ("SELECT COUNT(*) FROM molecules").fetch_one(pool).await { Ok((c,)) => Some(c), Err(_) => None };
+            let before: Option<i64> = match sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool).await {
+                Ok((c,)) => Some(c),
+                Err(_) => None,
+            };
             // Normalización: usamos transacción para mantener consistencia entre tablas.
             let mut tx = pool.begin().await?;
-
-            // 1. Upsert de moléculas individuales (evita duplicados por inchikey).
-            for (idx, mol) in family.molecules.iter().enumerate() {
-                eprintln!("[upsert_family] inserting molecule {} ({}/{})", mol.inchikey, idx+1, family.molecules.len());
-                sqlx::query(
-                    "INSERT INTO molecules (inchikey, inchi, smiles, common_name) VALUES ($1,$2,$3,$4)
-                     ON CONFLICT (inchikey) DO UPDATE SET inchi = EXCLUDED.inchi, smiles = EXCLUDED.smiles, common_name = EXCLUDED.common_name, updated_at = now()"
-                )
-                .bind(&mol.inchikey)
-                .bind(&mol.inchi)
-                .bind(&mol.smiles)
-                .bind(&mol.common_name)
-                .execute(&mut *tx)
-                .await?;
-                // Insert relación (se borrarán todas antes, así que ON CONFLICT opcional)
-                sqlx::query(
-                    "INSERT INTO molecule_family_molecules (family_id, molecule_inchikey, position) VALUES ($1,$2,$3)
-                     ON CONFLICT (family_id, molecule_inchikey) DO UPDATE SET position = EXCLUDED.position"
-                )
-                .bind(family.id)
-                .bind(&mol.inchikey)
-                .bind(idx as i32)
-                .execute(&mut *tx)
-                .await?;
-            }
-            eprintln!("[upsert_family] completed molecules link for family {} total={}", family.id, family.molecules.len());
-
-            // 2. Upsert de la familia: ahora la columna `molecules` guarda sólo los inchikeys (array JSON) para compatibilidad.
+            // 1. Upsert de la familia primero (evita violar FK al insertar relaciones de
+            //    moléculas).
             let inchikeys: Vec<&String> = family.molecules.iter().map(|m| &m.inchikey).collect();
+            eprintln!("[upsert_family] upserting family row {} (molecule_count={})", family.id, inchikeys.len());
             sqlx::query(
              "INSERT INTO molecule_families (id, name, description, molecules, properties, parameters, provenance, frozen, frozen_at, family_hash)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -182,81 +173,95 @@ impl WorkflowExecutionRepository {
             .execute(&mut *tx)
             .await?;
 
+            // 2. Upsert de moléculas + relaciones ahora que la fila de familia existe.
+            for (idx, mol) in family.molecules.iter().enumerate() {
+                eprintln!("[upsert_family] inserting molecule {} ({}/{})", mol.inchikey, idx + 1, family.molecules.len());
+                sqlx::query(
+                            "INSERT INTO molecules (inchikey, inchi, smiles, common_name) VALUES ($1,$2,$3,$4)
+                     ON CONFLICT (inchikey) DO UPDATE SET inchi = EXCLUDED.inchi, smiles = EXCLUDED.smiles, common_name = EXCLUDED.common_name, updated_at = now()",
+                ).bind(&mol.inchikey)
+                 .bind(&mol.inchi)
+                 .bind(&mol.smiles)
+                 .bind(&mol.common_name)
+                 .execute(&mut *tx)
+                 .await?;
+                sqlx::query(
+                            "INSERT INTO molecule_family_molecules (family_id, molecule_inchikey, position) VALUES ($1,$2,$3)
+                     ON CONFLICT (family_id, molecule_inchikey) DO UPDATE SET position = EXCLUDED.position",
+                ).bind(family.id)
+                 .bind(&mol.inchikey)
+                 .bind(idx as i32)
+                 .execute(&mut *tx)
+                 .await?;
+            }
+            eprintln!("[upsert_family] completed molecules link for family {} total={}", family.id, family.molecules.len());
+
             // 3. Propiedades (igual que antes) -> tabla flatten.
             for (prop_name, entry) in &family.properties {
                 for value in &entry.values {
                     sqlx::query(
-                        "INSERT INTO molecule_family_properties (family_id, property_name, value, source, frozen, timestamp)
-                         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING"
-                    )
-                    .bind(family.id)
-                    .bind(prop_name)
-                    .bind(value.value)
-                    .bind(&value.source)
-                    .bind(value.frozen)
-                    .bind(value.timestamp)
-                    .execute(&mut *tx)
-                    .await?;
+                                "INSERT INTO molecule_family_properties (family_id, property_name, value, source, frozen, timestamp)
+                         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+                    ).bind(family.id)
+                     .bind(prop_name)
+                     .bind(value.value)
+                     .bind(&value.source)
+                     .bind(value.frozen)
+                     .bind(value.timestamp)
+                     .execute(&mut *tx)
+                     .await?;
                 }
                 // Proveniencia normalizada: proveedores
                 for prov in &entry.providers {
                     sqlx::query(
-                        "INSERT INTO molecule_family_property_providers (family_id, property_name, provider_type, provider_name, provider_version, execution_parameters, execution_id)
-                         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING"
-                    )
-                    .bind(family.id)
-                    .bind(prop_name)
-                    .bind(&prov.provider_type)
-                    .bind(&prov.provider_name)
-                    .bind(&prov.provider_version)
-                    .bind(serde_json::to_value(&prov.execution_parameters)?)
-                    .bind(prov.execution_id)
-                    .execute(&mut *tx)
-                    .await?;
+                                "INSERT INTO molecule_family_property_providers (family_id, property_name, provider_type, provider_name, provider_version, execution_parameters, execution_id)
+                         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING",
+                    ).bind(family.id)
+                     .bind(prop_name)
+                     .bind(&prov.provider_type)
+                     .bind(&prov.provider_name)
+                     .bind(&prov.provider_version)
+                     .bind(serde_json::to_value(&prov.execution_parameters)?)
+                     .bind(prov.execution_id)
+                     .execute(&mut *tx)
+                     .await?;
                 }
                 // Steps originantes
                 for sid in &entry.originating_steps {
-                    sqlx::query(
-                        "INSERT INTO molecule_family_property_steps (family_id, property_name, step_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING"
-                    )
-                    .bind(family.id)
-                    .bind(prop_name)
-                    .bind(sid)
-                    .execute(&mut *tx)
-                    .await?;
+                    sqlx::query("INSERT INTO molecule_family_property_steps (family_id, property_name, step_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING").bind(family.id)
+                                                                                                                                                          .bind(prop_name)
+                                                                                                                                                          .bind(sid)
+                                                                                                                                                          .execute(&mut *tx)
+                                                                                                                                                          .await?;
                 }
             }
 
             tx.commit().await?;
-            if let Some(bc) = before { if let Ok((ac,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool).await { eprintln!("[upsert_family] molecule count before={} after={} delta={} fam_id={}", bc, ac, ac - bc, family.id); } }
+            if let (Some(bc), Ok((ac,))) = (before, sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool).await) {
+                eprintln!("[upsert_family] molecule count before={} after={} delta={} fam_id={}", bc, ac, ac - bc, family.id);
+            }
         }
         Ok(())
     }
 
     pub async fn link_step_family(&self, step_id: Uuid, family_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
-            // Relación step <-> familia para reconstruir qué familias se generaron / modificaron en cada step.
-            sqlx::query(
-                "INSERT INTO workflow_step_family (step_id, family_id) VALUES ($1,$2) ON CONFLICT DO NOTHING"
-            )
-            .bind(step_id)
-            .bind(family_id)
-            .execute(pool)
-            .await?;
+            // Relación step <-> familia para reconstruir qué familias se generaron /
+            // modificaron en cada step.
+            sqlx::query("INSERT INTO workflow_step_family (step_id, family_id) VALUES ($1,$2) ON CONFLICT DO NOTHING").bind(step_id)
+                                                                                                                      .bind(family_id)
+                                                                                                                      .execute(pool)
+                                                                                                                      .await?;
         }
         Ok(())
     }
 
-
     pub async fn get_family(&self, id: Uuid) -> Result<Option<MoleculeFamily>, Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
             // Recuperamos metadatos de la familia (sin las moléculas aún).
-            let row_opt = sqlx::query(
-                "SELECT id, name, description, properties, parameters, provenance, frozen, frozen_at, family_hash FROM molecule_families WHERE id = $1"
-            )
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
+            let row_opt = sqlx::query("SELECT id, name, description, properties, parameters, provenance, frozen, frozen_at, family_hash FROM molecule_families WHERE id = $1").bind(id)
+                                                                                                                                                                              .fetch_optional(pool)
+                                                                                                                                                                              .await?;
 
             if let Some(row) = row_opt {
                 let id: Uuid = row.try_get("id")?;
@@ -271,60 +276,53 @@ impl WorkflowExecutionRepository {
 
                 // Ahora obtenemos las moléculas vía la tabla normalizada.
                 let molecule_rows = sqlx::query(
-                    "SELECT m.inchikey, m.inchi, m.smiles, m.common_name FROM molecule_family_molecules fm
-                     JOIN molecules m ON m.inchikey = fm.molecule_inchikey WHERE fm.family_id = $1 ORDER BY fm.position ASC"
-                )
-                .bind(id)
-                .fetch_all(pool)
-                .await?;
+                                                "SELECT m.inchikey, m.inchi, m.smiles, m.common_name FROM molecule_family_molecules fm
+                     JOIN molecules m ON m.inchikey = fm.molecule_inchikey WHERE fm.family_id = $1 ORDER BY fm.position ASC",
+                ).bind(id)
+                                    .fetch_all(pool)
+                                    .await?;
                 let mut molecules: Vec<Molecule> = Vec::with_capacity(molecule_rows.len());
                 for r in molecule_rows {
-                    molecules.push(Molecule {
-                        inchikey: r.try_get("inchikey")?,
-                        inchi: r.try_get("inchi")?,
-                        smiles: r.try_get("smiles")?,
-                        common_name: r.try_get("common_name")?,
-                    });
+                    molecules.push(Molecule { inchikey: r.try_get("inchikey")?,
+                                              inchi: r.try_get("inchi")?,
+                                              smiles: r.try_get("smiles")?,
+                                              common_name: r.try_get("common_name")? });
                 }
 
-                let mut family: MoleculeFamily = MoleculeFamily {
-                    id,
-                    name,
-                    description,
-                    molecules,
-                    properties: serde_json::from_value(properties_val)?,
-                    parameters: serde_json::from_value(parameters_val)?,
-                    provenance: provenance_val.map(|v| serde_json::from_value(v)).transpose()?,
-                    frozen,
-                    frozen_at,
-                    family_hash,
+                // Interpret JSON null (Some(Value::Null)) as absence of provenance to avoid
+                // deserialization error.
+                let provenance: Option<crate::data::family::FamilyProvenance> = match provenance_val {
+                    None => None,
+                    Some(serde_json::Value::Null) => None,
+                    Some(v) => Some(serde_json::from_value(v)?),
                 };
-                // Reconstruir providers y steps normalizados (merge sobre lo ya deserializado de properties JSON)
-                // Cargamos todos los providers y steps y los agregamos/evitamos duplicados.
-                let provider_rows = sqlx::query(
-                    "SELECT property_name, provider_type, provider_name, provider_version, execution_parameters, execution_id FROM molecule_family_property_providers WHERE family_id = $1"
-                )
-                .bind(id)
-                .fetch_all(pool)
-                .await?;
+                let mut family: MoleculeFamily = MoleculeFamily { id,
+                                                                  name,
+                                                                  description,
+                                                                  molecules,
+                                                                  properties: serde_json::from_value(properties_val)?,
+                                                                  parameters: serde_json::from_value(parameters_val)?,
+                                                                  provenance,
+                                                                  frozen,
+                                                                  frozen_at,
+                                                                  family_hash };
+                // Reconstruir providers y steps normalizados (merge sobre lo ya deserializado
+                // de properties JSON) Cargamos todos los providers y steps y
+                // los agregamos/evitamos duplicados.
+                let provider_rows = sqlx::query("SELECT property_name, provider_type, provider_name, provider_version, execution_parameters, execution_id FROM molecule_family_property_providers WHERE family_id = $1").bind(id)
+                                                                                                                                                                                                                        .fetch_all(pool)
+                                                                                                                                                                                                                        .await?;
                 let mut prov_map: HashMap<String, Vec<ProviderReference>> = HashMap::new();
                 for r in provider_rows {
                     let property_name: String = r.try_get("property_name")?;
-                    let pr = ProviderReference {
-                        provider_type: r.try_get("provider_type")?,
-                        provider_name: r.try_get("provider_name")?,
-                        provider_version: r.try_get("provider_version")?,
-                        execution_parameters: serde_json::from_value(r.try_get("execution_parameters")?)?,
-                        execution_id: r.try_get("execution_id")?,
-                    };
+                    let pr = ProviderReference { provider_type: r.try_get("provider_type")?,
+                                                 provider_name: r.try_get("provider_name")?,
+                                                 provider_version: r.try_get("provider_version")?,
+                                                 execution_parameters: serde_json::from_value(r.try_get("execution_parameters")?)?,
+                                                 execution_id: r.try_get("execution_id")? };
                     prov_map.entry(property_name).or_default().push(pr);
                 }
-                let step_rows = sqlx::query(
-                    "SELECT property_name, step_id FROM molecule_family_property_steps WHERE family_id = $1"
-                )
-                .bind(id)
-                .fetch_all(pool)
-                .await?;
+                let step_rows = sqlx::query("SELECT property_name, step_id FROM molecule_family_property_steps WHERE family_id = $1").bind(id).fetch_all(pool).await?;
                 let mut step_map: HashMap<String, Vec<uuid::Uuid>> = HashMap::new();
                 for r in step_rows {
                     let property_name: String = r.try_get("property_name")?;
@@ -357,20 +355,23 @@ impl WorkflowExecutionRepository {
         Ok(None)
     }
 
-    /// Congela una familia existente marcando frozen, timestamp y recalculando hash.
+    /// Congela una familia existente marcando frozen, timestamp y recalculando
+    /// hash.
     pub async fn freeze_family(&self, family_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut fam) = self.get_family(family_id).await? {
-            if fam.frozen { return Ok(()); }
+            if fam.frozen {
+                return Ok(());
+            }
             fam.frozen = true;
             fam.frozen_at = Some(chrono::Utc::now());
             let hash = compute_sorted_hash(&serde_json::json!({
-                "id": fam.id,
-                "molecules": fam.molecules.iter().map(|m| &m.inchikey).collect::<Vec<_>>(),
-                "parameters": fam.parameters,
-                "properties": fam.properties.keys().collect::<Vec<_>>(),
-                "frozen": fam.frozen,
-                "frozen_at": fam.frozen_at,
-            }));
+                                               "id": fam.id,
+                                               "molecules": fam.molecules.iter().map(|m| &m.inchikey).collect::<Vec<_>>(),
+                                               "parameters": fam.parameters,
+                                               "properties": fam.properties.keys().collect::<Vec<_>>(),
+                                               "frozen": fam.frozen,
+                                               "frozen_at": fam.frozen_at,
+                                           }));
             fam.family_hash = Some(hash);
             self.upsert_family(&fam).await?;
         }
@@ -396,7 +397,8 @@ impl WorkflowExecutionRepository {
     }
 
     pub async fn get_execution(&self, execution_id: Uuid) -> Result<Vec<StepExecutionInfo>, Box<dyn std::error::Error>> {
-    // Preferimos in-memory (más rápido). Si se necesita consolidar con BD, se puede extender.
+        // Preferimos in-memory (más rápido). Si se necesita consolidar con BD, se puede
+        // extender.
         let guard = self.in_memory.read().await;
         Ok(guard.get(&execution_id).cloned().unwrap_or_default())
     }
@@ -407,7 +409,7 @@ impl WorkflowExecutionRepository {
     }
 
     pub async fn save_step_execution_for_branch(&self, execution: &StepExecutionInfo, branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
-    // Se clona la ejecución y se altera el step_id para representar la rama.
+        // Se clona la ejecución y se altera el step_id para representar la rama.
         let mut cloned = execution.clone();
         cloned.step_id = branch_id; // treat branch as separate id for now
         self.save_step_execution(&cloned).await
@@ -421,14 +423,17 @@ impl WorkflowExecutionRepository {
         Ok(())
     }
 
-    /// Recolecta todos los steps que comparten el mismo root_execution_id. Esto permite
-    /// reconstruir el linaje completo (incluyendo steps de ramas) ordenado cronológicamente.
+    /// Recolecta todos los steps que comparten el mismo root_execution_id. Esto
+    /// permite reconstruir el linaje completo (incluyendo steps de ramas)
+    /// ordenado cronológicamente.
     pub async fn get_steps_by_root(&self, root_id: Uuid) -> Vec<StepExecutionInfo> {
         let guard = self.in_memory.read().await;
         let mut collected = Vec::new();
         for vec_exec in guard.values() {
             for exec in vec_exec {
-                if exec.root_execution_id == root_id { collected.push(exec.clone()); }
+                if exec.root_execution_id == root_id {
+                    collected.push(exec.clone());
+                }
             }
         }
         collected.sort_by_key(|e| e.start_time);
@@ -440,53 +445,53 @@ impl WorkflowExecutionRepository {
 mod tests {
     use super::*;
     use crate::workflow::step::StepStatus;
-    use std::collections::HashMap;
     use chrono::Utc;
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_repository_methods() {
-    let repo = WorkflowExecutionRepository::new(true);
-        
-    let execution_info = StepExecutionInfo {
-            step_id: Uuid::new_v4(),
-            parameters: HashMap::new(),
-            parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
-            providers_used: Vec::new(),
-            start_time: Utc::now(),
-            end_time: Utc::now(),
-            status: StepStatus::Completed,
-            root_execution_id: Uuid::new_v4(),
-            parent_step_id: None,
-            branch_from_step_id: None,
-            input_family_ids: Vec::new(),
-        };
-        
+        let repo = WorkflowExecutionRepository::new(true);
+
+        let execution_info = StepExecutionInfo { step_id: Uuid::new_v4(),
+                                                 parameters: HashMap::new(),
+                                                 parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
+                                                 providers_used: Vec::new(),
+                                                 start_time: Utc::now(),
+                                                 end_time: Utc::now(),
+                                                 status: StepStatus::Completed,
+                                                 root_execution_id: Uuid::new_v4(),
+                                                 parent_step_id: None,
+                                                 branch_from_step_id: None,
+                                                 input_family_ids: Vec::new() };
+
         // Test save_step_execution
         repo.save_step_execution(&execution_info).await.unwrap();
-        
+
         // Test get_execution
         let executions = repo.get_execution(execution_info.step_id).await.unwrap();
         assert_eq!(executions.len(), 1);
-        
+
         // Test get_step_execution
         let step = repo.get_step_execution(execution_info.step_id, 0).await.unwrap();
         assert_eq!(step.step_id, execution_info.step_id);
-        
+
         // Test save_step_execution_for_branch
         let branch_id = Uuid::new_v4();
         repo.save_step_execution_for_branch(&execution_info, branch_id).await.unwrap();
-        
+
         let branch_executions = repo.get_execution(branch_id).await.unwrap();
         assert_eq!(branch_executions.len(), 1);
-        
+
         // Test get_step (will error but calls the method)
         let _ = repo.get_step(Uuid::new_v4()).await;
-        
+
         // Test save_step_for_branch
         repo.save_step_for_branch(&(), Uuid::new_v4()).await.unwrap();
 
-    // Call get_family (will be None in in-memory mode without persisted DB pool)
-    let _none = repo.get_family(Uuid::new_v4()).await.unwrap();
+        // Call get_family (will be None in in-memory mode without persisted DB pool)
+        let _none = repo.get_family(Uuid::new_v4()).await.unwrap();
+        // Exercise freeze_family (no-op without DB, ensures method is used)
+        repo.freeze_family(Uuid::new_v4()).await.unwrap();
         // Test get_steps_by_root (should find entries for existing root ids)
         let list = repo.get_steps_by_root(execution_info.root_execution_id).await;
         assert!(!list.is_empty());
@@ -497,41 +502,40 @@ mod tests {
 mod repository_usage_tests {
     use super::*;
     use crate::workflow::step::StepStatus;
-    use uuid::Uuid;
     use chrono::Utc;
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_repo_all_methods() {
-    let repo = WorkflowExecutionRepository::new(true);
-    let info = StepExecutionInfo {
-        step_id: Uuid::new_v4(),
-        parameters: HashMap::new(),
-        parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
-        providers_used: Vec::new(),
-        start_time: Utc::now(),
-        end_time: Utc::now(),
-        status: StepStatus::Pending,
-        root_execution_id: Uuid::new_v4(),
-        parent_step_id: None,
-        branch_from_step_id: None,
-        input_family_ids: Vec::new(),
-    };
+        let repo = WorkflowExecutionRepository::new(true);
+        let info = StepExecutionInfo { step_id: Uuid::new_v4(),
+                                       parameters: HashMap::new(),
+                                       parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
+                                       providers_used: Vec::new(),
+                                       start_time: Utc::now(),
+                                       end_time: Utc::now(),
+                                       status: StepStatus::Pending,
+                                       root_execution_id: Uuid::new_v4(),
+                                       parent_step_id: None,
+                                       branch_from_step_id: None,
+                                       input_family_ids: Vec::new() };
         repo.save_step_execution(&info).await.unwrap();
         let all = repo.get_execution(info.step_id).await.unwrap();
         assert_eq!(all.len(), 1);
         let one = repo.get_step_execution(info.step_id, 0).await.unwrap();
         assert_eq!(one.step_id, info.step_id);
         let branch = Uuid::new_v4();
-    repo.save_step_execution_for_branch(&info, branch).await.unwrap();
+        repo.save_step_execution_for_branch(&info, branch).await.unwrap();
         let branched = repo.get_execution(branch).await.unwrap();
         assert_eq!(branched.len(), 1);
         let _ = repo.get_step(Uuid::new_v4()).await;
         repo.save_step_for_branch(&(), Uuid::new_v4()).await.unwrap();
-    let _none = repo.get_family(Uuid::new_v4()).await.unwrap();
-    let _by_root = repo.get_steps_by_root(info.root_execution_id).await;
+        let _none = repo.get_family(Uuid::new_v4()).await.unwrap();
+        // Exercise freeze_family again to avoid dead code warning
+        repo.freeze_family(Uuid::new_v4()).await.unwrap();
+        let _by_root = repo.get_steps_by_root(info.root_execution_id).await;
     }
 }
-
 
 async fn _use_repository_methods() {
     use crate::workflow::step::{StepExecutionInfo, StepStatus};
@@ -541,19 +545,17 @@ async fn _use_repository_methods() {
 
     let repo = WorkflowExecutionRepository::new(true);
     let id = Uuid::new_v4();
-    let info = StepExecutionInfo {
-        step_id: id,
-        parameters: HashMap::new(),
-        parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
-        providers_used: Vec::new(),
-        start_time: Utc::now(),
-        end_time: Utc::now(),
-        status: StepStatus::Completed,
-        root_execution_id: Uuid::new_v4(),
-        parent_step_id: None,
-        branch_from_step_id: None,
-    input_family_ids: Vec::new(),
-    };
+    let info = StepExecutionInfo { step_id: id,
+                                   parameters: HashMap::new(),
+                                   parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
+                                   providers_used: Vec::new(),
+                                   start_time: Utc::now(),
+                                   end_time: Utc::now(),
+                                   status: StepStatus::Completed,
+                                   root_execution_id: Uuid::new_v4(),
+                                   parent_step_id: None,
+                                   branch_from_step_id: None,
+                                   input_family_ids: Vec::new() };
     let _ = repo.save_step_execution(&info).await;
     let _ = repo.get_execution(id).await;
     let _ = repo.get_step_execution(id, 0).await;

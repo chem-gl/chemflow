@@ -4,13 +4,19 @@ use std::collections::HashMap;
 
 use crate::data::family::MoleculeFamily;
 use crate::data::types::LogPData;
-use crate::providers::properties::trait_properties::{PropertiesProvider, ParameterDefinition, ParameterType};
+use crate::providers::properties::trait_properties::{ParameterDefinition, ParameterType, PropertiesProvider};
 
 pub struct TestPropertiesProvider;
 
 impl TestPropertiesProvider {
     pub fn new() -> Self {
         Self
+    }
+}
+
+impl Default for TestPropertiesProvider {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -34,34 +40,25 @@ impl PropertiesProvider for TestPropertiesProvider {
 
     fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition> {
         let mut params = HashMap::new();
-        params.insert("calculation_method".to_string(), ParameterDefinition {
-            name: "calculation_method".to_string(),
-            description: "Method to use for calculation".to_string(),
-            data_type: ParameterType::String,
-            required: false,
-            default_value: Some(Value::String("test_method".to_string())),
-        });
+        params.insert("calculation_method".to_string(),
+                      ParameterDefinition { name: "calculation_method".to_string(),
+                                            description: "Method to use for calculation".to_string(),
+                                            data_type: ParameterType::String,
+                                            required: false,
+                                            default_value: Some(Value::String("test_method".to_string())) });
         params
     }
 
-    async fn calculate_properties(
-        &self,
-    molecule_family: &MoleculeFamily,
-        parameters: &HashMap<String, Value>
-    ) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
-        let method = parameters.get("calculation_method")
-            .and_then(|v| v.as_str())
-            .unwrap_or("test_method");
+    async fn calculate_properties(&self, molecule_family: &MoleculeFamily, parameters: &HashMap<String, Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
+        let method = parameters.get("calculation_method").and_then(|v| v.as_str()).unwrap_or("test_method");
 
         let mut results = Vec::new();
-    for molecule in &molecule_family.molecules {
+        for molecule in &molecule_family.molecules {
             let logp_value = molecule.smiles.len() as f64 * 0.1;
-            let logp_data = LogPData {
-                value: logp_value,
-                source: format!("TestProvider_{}", method),
-                frozen: false,
-                timestamp: chrono::Utc::now(),
-            };
+            let logp_data = LogPData { value: logp_value,
+                                       source: format!("TestProvider_{}", method),
+                                       frozen: false,
+                                       timestamp: chrono::Utc::now() };
             results.push(logp_data);
         }
         Ok(results)

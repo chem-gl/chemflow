@@ -14,6 +14,12 @@ impl TestMoleculeProvider {
     }
 }
 
+impl Default for TestMoleculeProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl MoleculeProvider for TestMoleculeProvider {
     fn get_name(&self) -> &str {
@@ -30,23 +36,17 @@ impl MoleculeProvider for TestMoleculeProvider {
 
     fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition> {
         let mut params = HashMap::new();
-        params.insert("count".to_string(), ParameterDefinition {
-            name: "count".to_string(),
-            description: "Number of molecules to generate".to_string(),
-            data_type: ParameterType::Number,
-            required: false,
-            default_value: Some(Value::Number(10.into())),
-        });
+        params.insert("count".to_string(),
+                      ParameterDefinition { name: "count".to_string(),
+                                            description: "Number of molecules to generate".to_string(),
+                                            data_type: ParameterType::Number,
+                                            required: false,
+                                            default_value: Some(Value::Number(10.into())) });
         params
     }
 
-    async fn get_molecule_family(
-        &self,
-        parameters: &HashMap<String, Value>
-    ) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
-        let count = parameters.get("count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(10) as usize;
+    async fn get_molecule_family(&self, parameters: &HashMap<String, Value>) -> Result<MoleculeFamily, Box<dyn std::error::Error>> {
+        let count = parameters.get("count").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
         let mut molecules = Vec::new();
         for i in 0..count {
@@ -67,8 +67,7 @@ mod tests {
     use crate::providers::molecule::traitmolecule::MoleculeProvider;
 
     use super::TestMoleculeProvider;
-  
-  
+
     #[test]
     fn test_provider_metadata_and_parameters() {
         let provider = TestMoleculeProvider::new();
