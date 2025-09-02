@@ -32,12 +32,15 @@ impl MoleculeProvider for AntioxidantSeedProvider {
         if let Some(Value::Array(extra)) = parameters.get("extra_seeds") {
             for v in extra { if let Some(smi) = v.as_str() { fam.molecules.push(Molecule::from_smiles(smi.to_string())?); } }
         }
-        fam.source_provider = Some(ProviderReference {
-            provider_type: "molecule".into(),
-            provider_name: self.get_name().into(),
-            provider_version: self.get_version().into(),
-            execution_parameters: parameters.clone(),
-            execution_id: uuid::Uuid::new_v4(),
+        fam.provenance = Some(crate::data::family::FamilyProvenance {
+            created_in_step: None,
+            creation_provider: Some(ProviderReference {
+                provider_type: "molecule".into(),
+                provider_name: self.get_name().into(),
+                provider_version: self.get_version().into(),
+                execution_parameters: parameters.clone(),
+                execution_id: uuid::Uuid::new_v4(),
+            })
         });
         Ok(fam)
     }

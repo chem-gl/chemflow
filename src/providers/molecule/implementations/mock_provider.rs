@@ -51,7 +51,7 @@ impl MoleculeProvider for MockMoleculeProvider {
             execution_parameters: parameters.clone(),
             execution_id: uuid::Uuid::new_v4(),
         };
-        family.source_provider = Some(provider_ref);
+        // If you want to associate provider_ref, use an existing field or method in MoleculeFamily, otherwise just omit this line.
 
         Ok(family)
     }

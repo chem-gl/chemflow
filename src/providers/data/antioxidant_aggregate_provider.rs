@@ -47,7 +47,7 @@ mod tests {
         let p = AntioxidantAggregateProvider;
         let mut fam = MoleculeFamily::new("F".into(), None);
     let provider_ref = ProviderReference { provider_type: "properties".into(), provider_name: "mock".into(), provider_version: "0.0".into(), execution_parameters: HashMap::new(), execution_id: uuid::Uuid::new_v4() };
-    fam.properties.insert("radical_scavenging_score".into(), FamilyProperty { provider: provider_ref, values: vec![LogPData { value: 1.0, source: "s".into(), frozen: false, timestamp: Utc::now() }] });
+    fam.properties.insert("radical_scavenging_score".into(), FamilyProperty {values:vec![LogPData{value:1.0,source:"s".into(),frozen:false,timestamp:Utc::now()}], providers: todo!(), originating_steps: todo!() });
         let v = p.calculate(&[fam], &HashMap::new()).await.unwrap();
         assert!(v.get("mean").is_some());
     }

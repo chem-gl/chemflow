@@ -78,6 +78,41 @@ impl WorkflowManager {
         input_families: Vec<MoleculeFamily>,
         step_parameters: HashMap<String, serde_json::Value>,
     ) -> Result<StepOutput, Box<dyn std::error::Error>> {
+    // 0. Auto-branch: si cambia el hash de parámetros O cambia el hash agregado de familias de entrada -> nueva rama lógica.
+    if step.allows_branching() {
+        let mut trigger_branch = false;
+        if let Some(prev_id) = self.last_step_id {
+            let prospective_param_hash = crate::database::repository::compute_sorted_hash(&step_parameters);
+            if let Ok(prev_execs) = self.execution_repo.get_execution(prev_id).await {
+                if let Some(prev_exec) = prev_execs.last() {
+                    if prev_exec.parameter_hash.as_deref() != Some(&prospective_param_hash) { trigger_branch = true; }
+                }
+            }
+        }
+        // Comparar hash combinado de familias de entrada (family_hash si existe, si no fallback a id + propiedades).
+        if !trigger_branch {
+            let combined = crate::database::repository::compute_sorted_hash(&input_families.iter().map(|f| serde_json::json!({
+                "id": f.id,
+                "family_hash": f.family_hash,
+                "properties": f.properties.keys().collect::<Vec<_>>()
+            })).collect::<Vec<_>>());
+            if let Some(prev_id) = self.last_step_id {
+                if let Ok(prev_execs) = self.execution_repo.get_execution(prev_id).await {
+                    if let Some(prev_exec) = prev_execs.last() {
+                        // Guardamos en parámetros el combined previo (heurística: param previous_input_families_hash)
+                        if prev_exec.parameters.get("_input_families_hash").and_then(|v| v.as_str()) != Some(&combined) {
+                            trigger_branch = true;
+                        }
+                    }
+                }
+            }
+        }
+        if trigger_branch {
+            if let Some(prev) = self.last_step_id {
+                if self.branch_origin.is_none() || self.branch_origin != Some(prev) { self.branch_origin = Some(prev); }
+            }
+        }
+    }
     // 1. Construir StepInput (familias + parámetros específicos de esta invocación).
     let input = StepInput {
             families: input_families,
@@ -102,18 +137,41 @@ impl WorkflowManager {
     let _ = step.get_output_types();
     let _ = step.allows_branching();
     // 3. Ejecutar el step concreto (obtiene familias/resultados + execution_info preliminar).
+    // Marcamos inicio antes de ejecutar para registrar tiempos correctamente.
+    let start_time = chrono::Utc::now();
     let mut output = step.execute(
-            input,
-            &self.molecule_providers,
-            &self.properties_providers,
-        ).await?;
+        input,
+        &self.molecule_providers,
+        &self.properties_providers,
+        &self.data_providers,
+    ).await?;
+    // Ajustamos tiempos reales.
+    output.execution_info.start_time = start_time;
+    output.execution_info.end_time = chrono::Utc::now();
         
         // 4. Enriquecer metadata de ejecución con contexto global de workflow (root, parent, branch).
-        let mut exec = output.execution_info.clone();
-        exec.root_execution_id = self.current_root_execution_id;
-        exec.parent_step_id = self.last_step_id;
+    let mut exec = output.execution_info.clone();
+    exec.root_execution_id = self.current_root_execution_id;
+    exec.parent_step_id = self.last_step_id;
     exec.branch_from_step_id = self.branch_origin;
+    exec.input_family_ids = output.families.iter().map(|f| f.id).collect();
         self.last_step_id = Some(exec.step_id);
+
+    // (Legacy source_provider removal) ahora la provenance inicial se asigna mediante creación explícita en steps de adquisición si fuera necesario.
+
+        // Hook: si el step es DataAggregationStep (detectable por output_types). Ejecutar DataProvider real.
+        if step.get_output_types().contains(&"aggregation_result".to_string()) {
+            // Obtener nombre de provider esperado desde parameters (convención) o fallback.
+            if let Some(provider_name_val) = output.execution_info.parameters.get("data_provider") {
+                if let Some(provider_name) = provider_name_val.as_str() {
+                    if let Some(dp) = self.data_providers.get(provider_name) {
+                        let families_snapshot = output.families.clone();
+                        let result_value = dp.calculate(&families_snapshot, &output.execution_info.parameters).await?;
+                        output.results.insert("aggregation".to_string(), result_value);
+                    }
+                }
+            }
+        }
 
     // 5. Persistir la ejecución (in-memory + opcionalmente DB) para reconstrucción posterior.
     self.execution_repo.save_step_execution(&exec).await?;
@@ -121,9 +179,26 @@ impl WorkflowManager {
     output.execution_info = exec.clone();
 
         // 7. Persistir familias (upsert) y la relación step->family (histórico y consultas trazables).
-        for fam in &output.families {
-            let _ = self.execution_repo.upsert_family(fam).await; // ignore errors for now
+        for fam in &mut output.families {
+            // Congelar si se solicitó antes de persistir, para que hash refleje estado congelado.
+            if let Some(freeze_val) = output.execution_info.parameters.get("freeze") {
+                if freeze_val == &serde_json::json!(true) { fam.freeze(); }
+            }
+            // Recalcular hash (internamente usa inchikeys + parámetros + propiedades + flags).
+            fam.recompute_hash();
+            let _ = self.execution_repo.upsert_family(fam).await; // ignorar errores en flujo principal
             let _ = self.execution_repo.link_step_family(exec.step_id, fam.id).await;
+        }
+
+        // Persistir results individuales distinguiendo el tipo (aggregation/property/raw).
+        if !output.results.is_empty() {
+            let result_type = if step.get_output_types().contains(&"aggregation_result".to_string()) {
+                "aggregation"
+            } else if step.get_output_types().contains(&"molecule_family".to_string()) && !output.results.is_empty() {
+                // PropertiesCalculationStep usualmente no coloca resultados en results (añade a familias), pero si lo hiciera lo marcamos property.
+                "property"
+            } else { "raw" };
+            let _ = self.execution_repo.upsert_step_results_typed(exec.step_id, &output.results, result_type).await;
         }
         
     // 8. Resultado final con familias y snapshot de ejecución completamente contextualizado.
@@ -158,6 +233,7 @@ mod tests {
             input: StepInput,
             _m: &HashMap<String, Box<dyn MoleculeProvider>>,
             _p: &HashMap<String, Box<dyn PropertiesProvider>>,
+            _d: &HashMap<String, Box<dyn crate::providers::data::trait_dataprovider::DataProvider>>,
         ) -> Result<StepOutput, Box<dyn std::error::Error>> {
             Ok(StepOutput {
                 families: input.families.clone(),
@@ -165,6 +241,7 @@ mod tests {
                 execution_info: StepExecutionInfo {
                     step_id: Uuid::new_v4(),
                     parameters: input.parameters.clone(),
+                    parameter_hash: Some(crate::database::repository::compute_sorted_hash(&input.parameters)),
                     providers_used: Vec::new(),
                     start_time: chrono::Utc::now(),
                     end_time: chrono::Utc::now(),
@@ -172,6 +249,7 @@ mod tests {
                     root_execution_id: Uuid::new_v4(),
                     parent_step_id: None,
                     branch_from_step_id: None,
+                    input_family_ids: Vec::new(),
                 },
             })
         }

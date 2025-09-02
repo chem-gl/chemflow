@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::data::family::{MoleculeFamily, ProviderReference};
 use crate::providers::molecule::traitmolecule::{MoleculeProvider};
 use crate::providers::properties::trait_properties::PropertiesProvider;
+use crate::providers::data::trait_dataprovider::DataProvider;
 use crate::data::types::MolecularData;
 use serde_json::Value;
 
@@ -48,6 +49,8 @@ pub struct StepExecutionInfo {
     pub step_id: Uuid,
     /// Parámetros efectivos usados (ya con defaults aplicados y sólo los relevantes para reproducir).
     pub parameters: HashMap<String, serde_json::Value>,
+    /// Hash canónico (ordenado) de los parámetros para detectar divergencias y habilitar auto-branch.
+    pub parameter_hash: Option<String>,
     /// Lista de proveedores involucrados (puede haber más de uno en steps compuestos futuros).
     pub providers_used: Vec<ProviderReference>,
     /// Marca de tiempo de inicio de la ejecución.
@@ -65,6 +68,8 @@ pub struct StepExecutionInfo {
     // If this execution is part of a branch, which step it branched from
     /// Si es parte de una rama, indica desde qué step exacto se originó la bifurcación.
     pub branch_from_step_id: Option<Uuid>,
+    /// IDs de familias de entrada utilizadas en este step para reconstrucción de dependencias.
+    pub input_family_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +108,7 @@ pub trait WorkflowStep: Send + Sync {
         input: StepInput,
         molecule_providers: &HashMap<String, Box<dyn MoleculeProvider>>,
         properties_providers: &HashMap<String, Box<dyn PropertiesProvider>>,
+        data_providers: &HashMap<String, Box<dyn DataProvider>>,
     ) -> Result<StepOutput, Box<dyn std::error::Error>>;
 }
 
@@ -190,6 +196,7 @@ impl WorkflowStep for MoleculeAcquisitionStep {
         _input: StepInput,
         molecule_providers: &HashMap<String, Box<dyn MoleculeProvider>>,
         _properties_providers: &HashMap<String, Box<dyn PropertiesProvider>>,
+        _data_providers: &HashMap<String, Box<dyn DataProvider>>,
     ) -> Result<StepOutput, Box<dyn std::error::Error>> {
         // 1. Localizar proveedor registrado.
         let provider = molecule_providers.get(&self.provider_name)
@@ -212,7 +219,13 @@ impl WorkflowStep for MoleculeAcquisitionStep {
         let validated = validate_parameters(&self.parameters, &param_defs)
             .map_err(|e| format!("Parameter validation failed: {e}"))?;
         // 4. Ejecutar proveedor para construir familia base (origen de la trazabilidad).
-        let family = provider.get_molecule_family(&validated).await?;
+        let mut family = provider.get_molecule_family(&validated).await?;
+        // Recompute family hash on creation
+        if let Some(h) = crate::database::repository::compute_sorted_hash(&serde_json::json!({
+            "molecules": family.molecules.iter().map(|m| &m.inchikey).collect::<Vec<_>>(),
+            "properties": family.properties.keys().collect::<Vec<_>>(),
+            "parameters": family.parameters,
+        })).into() { family.family_hash = Some(h); }
         
         Ok(StepOutput {
             families: vec![family],
@@ -222,6 +235,7 @@ impl WorkflowStep for MoleculeAcquisitionStep {
             execution_info: StepExecutionInfo {
                 step_id: self.id,
                 parameters: validated.clone(),
+                parameter_hash: Some(crate::database::repository::compute_sorted_hash(&validated)),
                 providers_used: vec![ProviderReference {
                     provider_type: "molecule".to_string(),
                     provider_name: self.provider_name.clone(),
@@ -235,6 +249,7 @@ impl WorkflowStep for MoleculeAcquisitionStep {
                 root_execution_id: Uuid::new_v4(),
                 parent_step_id: None,
                 branch_from_step_id: None,
+                input_family_ids: Vec::new(),
             },
         })
     }
@@ -250,6 +265,58 @@ pub struct PropertiesCalculationStep {
     pub provider_name: String,
     pub property_name: String,
     pub parameters: HashMap<String, serde_json::Value>,
+}
+
+/// Step que agrega datos (estadísticas, métricas) a partir de múltiples familias usando un DataProvider.
+/// No modifica las familias; coloca el resultado JSON en StepOutput.results bajo una clave proporcionada.
+pub struct DataAggregationStep {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+    pub provider_name: String,
+    pub result_key: String,
+    pub parameters: HashMap<String, serde_json::Value>,
+}
+
+#[async_trait]
+impl WorkflowStep for DataAggregationStep {
+    fn get_id(&self) -> Uuid { self.id }
+    fn get_name(&self) -> &str { &self.name }
+    fn get_description(&self) -> &str { &self.description }
+    fn get_required_input_types(&self) -> Vec<String> { vec!["molecule_family".to_string()] }
+    fn get_output_types(&self) -> Vec<String> { vec!["aggregation_result".to_string()] }
+    fn allows_branching(&self) -> bool { true }
+
+    async fn execute(
+        &self,
+        input: StepInput,
+        _molecule_providers: &HashMap<String, Box<dyn MoleculeProvider>>,
+        _properties_providers: &HashMap<String, Box<dyn PropertiesProvider>>,
+        data_providers: &HashMap<String, Box<dyn DataProvider>>,
+    ) -> Result<StepOutput, Box<dyn std::error::Error>> {
+        let provider = data_providers.get(&self.provider_name)
+            .ok_or_else(|| format!("Data provider {} not found", self.provider_name))?;
+        let result_value = provider.calculate(&input.families, &self.parameters).await?;
+        let mut results = HashMap::new();
+        results.insert(self.result_key.clone(), result_value);
+        Ok(StepOutput {
+            families: input.families.clone(),
+            results,
+            execution_info: StepExecutionInfo {
+                step_id: self.id,
+                parameters: self.parameters.clone(),
+                parameter_hash: Some(crate::database::repository::compute_sorted_hash(&self.parameters)),
+                providers_used: vec![], // Podríamos registrar DataProviderReference especializado si se desea
+                start_time: chrono::Utc::now(),
+                end_time: chrono::Utc::now(),
+                status: StepStatus::Completed,
+                root_execution_id: Uuid::new_v4(),
+                parent_step_id: None,
+                branch_from_step_id: None,
+                input_family_ids: input.families.iter().map(|f| f.id).collect(),
+            },
+        })
+    }
 }
 
 #[async_trait]
@@ -283,6 +350,7 @@ impl WorkflowStep for PropertiesCalculationStep {
         input: StepInput,
         _molecule_providers: &HashMap<String, Box<dyn MoleculeProvider>>,
         properties_providers: &HashMap<String, Box<dyn PropertiesProvider>>,
+        _data_providers: &HashMap<String, Box<dyn DataProvider>>,
     ) -> Result<StepOutput, Box<dyn std::error::Error>> {
         // 1. Resolver proveedor de propiedades.
         let provider = properties_providers.get(&self.provider_name)
@@ -322,7 +390,7 @@ impl WorkflowStep for PropertiesCalculationStep {
                 provider_version: provider.get_version().to_string(),
                 execution_parameters: self.parameters.clone(),
                 execution_id: Uuid::new_v4(),
-            });
+            }, Some(self.id));
         }
         
         Ok(StepOutput {
@@ -332,6 +400,7 @@ impl WorkflowStep for PropertiesCalculationStep {
             execution_info: StepExecutionInfo {
                 step_id: self.id,
                 parameters: validated.clone(),
+                parameter_hash: Some(crate::database::repository::compute_sorted_hash(&validated)),
                 providers_used: vec![ProviderReference {
                     provider_type: "properties".to_string(),
                     provider_name: self.provider_name.clone(),
@@ -345,6 +414,7 @@ impl WorkflowStep for PropertiesCalculationStep {
                 root_execution_id: Uuid::new_v4(),
                 parent_step_id: None,
                 branch_from_step_id: None,
+                input_family_ids: input.families.iter().map(|f| f.id).collect(),
             },
         })
     }
@@ -390,6 +460,7 @@ mod tests {
             _input: StepInput,
             _molecule_providers: &HashMap<String, Box<dyn MoleculeProvider>>,
             _properties_providers: &HashMap<String, Box<dyn PropertiesProvider>>,
+            _data_providers: &HashMap<String, Box<dyn DataProvider>>,
         ) -> Result<StepOutput, Box<dyn std::error::Error>> {
             Ok(StepOutput {
                 families: Vec::new(),
@@ -397,6 +468,7 @@ mod tests {
                 execution_info: StepExecutionInfo {
                     step_id: self.id,
                     parameters: HashMap::new(),
+                    parameter_hash: Some(crate::database::repository::compute_sorted_hash(&HashMap::<String, serde_json::Value>::new())),
                     providers_used: Vec::new(),
                     start_time: chrono::Utc::now(),
                     end_time: chrono::Utc::now(),
@@ -404,6 +476,7 @@ mod tests {
                     root_execution_id: Uuid::new_v4(),
                     parent_step_id: None,
                     branch_from_step_id: None,
+                    input_family_ids: Vec::new(),
                 },
             })
         }
@@ -444,7 +517,7 @@ mod tests {
         };
         // Execute
         let input = StepInput { families: Vec::new(), parameters: HashMap::new() };
-        let output = step.execute(input, &mol_providers, &props_providers)
+    let output = step.execute(input, &mol_providers, &props_providers, &HashMap::new())
             .await.expect("execution should succeed");
         // Assertions
         assert_eq!(output.families.len(), 1);
@@ -485,7 +558,7 @@ mod tests {
             parameters: HashMap::new(),
         };
         // Execute
-        let output = step.execute(input, &mol_providers, &props_providers)
+    let output = step.execute(input, &mol_providers, &props_providers, &HashMap::new())
             .await.expect("execution should succeed");
         // Assertions
         assert_eq!(output.families.len(), 1);
