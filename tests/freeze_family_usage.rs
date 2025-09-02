@@ -7,7 +7,7 @@ async fn test_freeze_family_noop_in_memory() {
     let repo = WorkflowExecutionRepository::new(true);
     // Create a dummy family and upsert only in memory path (no pool so nothing
     // persisted)
-    let mut fam = MoleculeFamily::new("Freeze Test".into(), None);
+    let fam = MoleculeFamily::new("Freeze Test".into(), None);
     // Simulate a hash-freeze call path (will just early return because get_family
     // finds None)
     let _ = repo.freeze_family(Uuid::new_v4()).await; // should be Ok

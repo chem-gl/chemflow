@@ -85,8 +85,18 @@ impl WorkflowManager {
     pub async fn execute_step(&mut self, step: &dyn WorkflowStep, input_families: Vec<MoleculeFamily>, step_parameters: HashMap<String, serde_json::Value>) -> Result<StepOutput, Box<dyn std::error::Error>> {
         // 0. Auto-branch: si cambia el hash de parámetros O cambia el hash agregado de
         //    familias de entrada -> nueva rama lógica.
+        // Pre-cálculo hash familias (para persistir y comparar en futuras ejecuciones)
+        let input_families_hash = crate::database::repository::compute_sorted_hash(&input_families.iter()
+                                                                                                  .map(|f| {
+                                                                                                      serde_json::json!({
+                                                                                                          "id": f.id,
+                                                                                                          "family_hash": f.family_hash,
+                                                                                                          "properties": f.properties.keys().collect::<Vec<_>>()
+                                                                                                      })
+                                                                                                  })
+                                                                                                  .collect::<Vec<_>>());
+
         if step.allows_branching() {
-            // Obtener última ejecución previa (si existe) una sola vez.
             let prev_exec_opt = if let Some(prev_id) = self.last_step_id {
                 match self.execution_repo.get_execution(prev_id).await {
                     Ok(prev_execs) => prev_execs.last().cloned(),
@@ -95,28 +105,10 @@ impl WorkflowManager {
             } else {
                 None
             };
-
             let prospective_param_hash = crate::database::repository::compute_sorted_hash(&step_parameters);
-            let param_changed = match &prev_exec_opt {
-                Some(prev_exec) => prev_exec.parameter_hash.as_deref() != Some(&prospective_param_hash),
-                None => true,
-            };
-
-            let input_families_hash = crate::database::repository::compute_sorted_hash(&input_families.iter()
-                                                                                                      .map(|f| {
-                                                                                                          serde_json::json!({
-                                                                                                              "id": f.id,
-                                                                                                              "family_hash": f.family_hash,
-                                                                                                              "properties": f.properties.keys().collect::<Vec<_>>()
-                                                                                                          })
-                                                                                                      })
-                                                                                                      .collect::<Vec<_>>());
-            let input_changed = match &prev_exec_opt {
-                Some(prev_exec) => prev_exec.parameters.get("_input_families_hash").and_then(|v| v.as_str()) != Some(&input_families_hash),
-                None => true,
-            };
-
-            if (param_changed || input_changed) && self.last_step_id.is_some() && self.branch_origin != self.last_step_id {
+            // Branch sólo si cambian parámetros y no es primera ejecución
+            let param_changed = matches!(&prev_exec_opt, Some(prev_exec) if prev_exec.parameter_hash.as_deref() != Some(&prospective_param_hash));
+            if param_changed && self.branch_origin != self.last_step_id {
                 self.branch_origin = self.last_step_id;
             }
         }
@@ -159,6 +151,9 @@ impl WorkflowManager {
         exec.branch_from_step_id = self.branch_origin;
         exec.input_family_ids = output.families.iter().map(|f| f.id).collect();
         self.last_step_id = Some(exec.step_id);
+        // Persistir hash input_families para comparación futura (antes de salvar
+        // execution_info)
+        exec.parameters.insert("_input_families_hash".into(), serde_json::json!(input_families_hash));
 
         // (Legacy source_provider removal) ahora la provenance inicial se asigna
         // mediante creación explícita en steps de adquisición si fuera necesario.

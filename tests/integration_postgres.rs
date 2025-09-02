@@ -1,7 +1,13 @@
-use crate::data::family::MoleculeFamily;
-use crate::database::repository::WorkflowExecutionRepository;
-use crate::workflow::step::{StepExecutionInfo, StepInput, StepOutput, StepStatus, WorkflowStep};
 use async_trait::async_trait;
+use chemflow_rust::{
+    data::family::MoleculeFamily,
+    repository::WorkflowExecutionRepository,
+    workflow::{
+        manager::WorkflowManager,
+        step::{StepExecutionInfo, StepInput, StepOutput, StepStatus, WorkflowStep},
+    },
+};
+use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -32,9 +38,9 @@ impl WorkflowStep for AggregationLikeStep {
     }
     async fn execute(&self,
                      _input: StepInput,
-                     _m: &HashMap<String, Box<dyn crate::providers::molecule::traitmolecule::MoleculeProvider>>,
-                     _p: &HashMap<String, Box<dyn crate::providers::properties::trait_properties::PropertiesProvider>>,
-                     _d: &HashMap<String, Box<dyn crate::providers::data::trait_dataprovider::DataProvider>>)
+                     _m: &HashMap<String, Box<dyn chemflow_rust::providers::molecule::traitmolecule::MoleculeProvider>>,
+                     _p: &HashMap<String, Box<dyn chemflow_rust::providers::properties::trait_properties::PropertiesProvider>>,
+                     _d: &HashMap<String, Box<dyn chemflow_rust::providers::data::trait_dataprovider::DataProvider>>)
                      -> Result<StepOutput, Box<dyn std::error::Error>> {
         let mut results = HashMap::new();
         results.insert("aggregation".to_string(), serde_json::json!({"count":0}));
@@ -42,7 +48,7 @@ impl WorkflowStep for AggregationLikeStep {
                         results,
                         execution_info: StepExecutionInfo { step_id: self.id,
                                                             parameters: HashMap::new(),
-                                                            parameter_hash: Some(crate::database::repository::compute_sorted_hash(&HashMap::<String, serde_json::Value>::new())),
+                                                            parameter_hash: Some(chemflow_rust::database::repository::compute_sorted_hash(&HashMap::<String, serde_json::Value>::new())),
                                                             providers_used: vec![],
                                                             start_time: chrono::Utc::now(),
                                                             end_time: chrono::Utc::now(),
@@ -90,11 +96,11 @@ async fn test_postgres_migrations_and_result_type() -> Result<(), Box<dyn std::e
     repo.upsert_family(&fam).await?;
     // Execute aggregation-like persistence path
     let step = AggregationLikeStep { id: Uuid::new_v4() };
-    let mut manager = crate::workflow::manager::WorkflowManager::new(repo.clone(), HashMap::new(), HashMap::new(), HashMap::new());
+    let mut manager = WorkflowManager::new(repo.clone(), HashMap::new(), HashMap::new(), HashMap::new());
     let out = manager.execute_step(&step, vec![fam.clone()], HashMap::new()).await?;
     assert!(out.execution_info.parameter_hash.is_some());
     // Query result_type for inserted row
-    if let Some(pool) = &repo.clone().pool {
+    if let Some(pool) = repo.clone().pool() {
         // access internal field via clone
         let row = sqlx::query("SELECT result_type FROM workflow_step_results WHERE step_id = $1 AND result_key='aggregation'").bind(out.execution_info.step_id)
                                                                                                                               .fetch_one(pool)
