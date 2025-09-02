@@ -46,7 +46,7 @@ impl PropertiesProvider for TestPropertiesProvider {
 
     async fn calculate_properties(
         &self,
-        molecule_family: &MoleculeFamily,
+    molecule_family: &MoleculeFamily,
         parameters: &HashMap<String, Value>
     ) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
         let method = parameters.get("calculation_method")
@@ -54,7 +54,7 @@ impl PropertiesProvider for TestPropertiesProvider {
             .unwrap_or("test_method");
 
         let mut results = Vec::new();
-        for molecule in &molecule_family.molecules {
+    for molecule in &molecule_family.molecules {
             let logp_value = molecule.smiles.len() as f64 * 0.1;
             let logp_data = LogPData {
                 value: logp_value,

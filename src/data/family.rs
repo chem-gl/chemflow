@@ -11,9 +11,20 @@ pub struct MoleculeFamily {
     pub name: String,
     pub description: Option<String>,
     pub molecules: Vec<Molecule>,
-    pub properties: HashMap<String, Vec<LogPData>>,
+    /// Map property name -> property entry (values + provider metadata)
+    pub properties: HashMap<String, FamilyProperty>,
+    /// Arbitrary parameters associated to this family (frozen at creation / mutation events)
     pub parameters: HashMap<String, serde_json::Value>,
+    /// Original provider that generated the base family (if any)
     pub source_provider: Option<ProviderReference>,
+}
+
+/// Represents a property (possibly multi-valued) attached to a family along with
+/// the provider & parameters used to calculate it for traceability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FamilyProperty {
+    pub values: Vec<LogPData>,
+    pub provider: ProviderReference,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,17 +49,18 @@ impl MoleculeFamily {
         }
     }
 
+    /// Attach a property with complete traceability information.
     pub fn add_property(
         &mut self,
-        property_name: String,
+        property_name: impl Into<String>,
         data: Vec<LogPData>,
         provider_reference: ProviderReference,
     ) {
-        self.properties.insert(property_name, data);
-        self.source_provider = Some(provider_reference);
+        let entry = FamilyProperty { values: data, provider: provider_reference };
+        self.properties.insert(property_name.into(), entry);
     }
 
-    pub fn get_property(&self, property_name: &str) -> Option<&Vec<LogPData>> {
+    pub fn get_property(&self, property_name: &str) -> Option<&FamilyProperty> {
         self.properties.get(property_name)
     }
 }
@@ -78,12 +90,15 @@ mod tests {
             execution_id: Uuid::new_v4(),
         };
         
-        family.add_property("logp".to_string(), logp_data, provider_ref);
+    family.add_property("logp", logp_data.clone(), provider_ref.clone());
         
         // Test get_property
         let property = family.get_property("logp");
         assert!(property.is_some());
-        assert_eq!(property.unwrap().len(), 1);
+    let p = property.unwrap();
+    assert_eq!(p.values.len(), 1);
+    assert_eq!(p.values[0].value, 1.5);
+    assert_eq!(p.provider.provider_name, "test_provider");
         
         let non_existent = family.get_property("nonexistent");
         assert!(non_existent.is_none());

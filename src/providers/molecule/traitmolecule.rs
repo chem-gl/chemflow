@@ -35,8 +35,6 @@ pub enum ParameterType {
     Object,
 }
 
-// Dummy function to use ParameterDefinition fields and ParameterType variants
-#[allow(dead_code)]
 fn _use_molecule_params() {
     let pd = ParameterDefinition {
         name: String::new(),

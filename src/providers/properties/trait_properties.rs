@@ -58,7 +58,7 @@ mod more_properties_provider_tests {
             _molecule_family: &MoleculeFamily,
             _parameters: &HashMap<String, Value>
         ) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
-            // Devolver dos datos: uno congelado y otro no, todos con source "advanced"
+                // Return two data points: one frozen and one not, all with source "advanced"
             Ok(vec![
                 LogPData {
                     value: 1.2,
@@ -139,8 +139,6 @@ pub enum ParameterType {
     Object,
 }
 
-// Dummy function to use ParameterDefinition fields and ParameterType variants
-#[allow(dead_code)]
 fn _use_properties_params() {
     let pd = ParameterDefinition {
         name: String::new(),

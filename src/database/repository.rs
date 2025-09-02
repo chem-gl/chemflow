@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use uuid::Uuid;
 use crate::workflow::step::{StepExecutionInfo, StepStatus};
+use crate::data::family::MoleculeFamily;
 
 #[derive(Clone)]
 pub struct WorkflowExecutionRepository {
@@ -9,10 +10,10 @@ pub struct WorkflowExecutionRepository {
 }
 
 impl WorkflowExecutionRepository {
-    pub fn new(in_memory_only: bool) -> Self {
+    pub fn new(_in_memory_only: bool) -> Self {
         Self {
             in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            pool: if in_memory_only { None } else { None },
+            pool: None, // in-memory only (placeholder for future pool wiring using flag)
         }
     }
 
@@ -49,6 +50,82 @@ impl WorkflowExecutionRepository {
         Ok(())
     }
 
+    pub async fn upsert_family(&self, family: &MoleculeFamily) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(pool) = &self.pool {
+            sqlx::query(
+                "INSERT INTO molecule_families (id, name, description, molecules, properties, parameters, source_provider)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)
+                 ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, description=EXCLUDED.description, molecules=EXCLUDED.molecules, properties=EXCLUDED.properties, parameters=EXCLUDED.parameters, source_provider=EXCLUDED.source_provider"
+            )
+            .bind(family.id)
+            .bind(&family.name)
+            .bind(&family.description)
+            .bind(serde_json::to_value(&family.molecules)?)
+            .bind(serde_json::to_value(&family.properties)?)
+            .bind(serde_json::to_value(&family.parameters)?)
+            .bind(serde_json::to_value(&family.source_provider)?)
+            .execute(pool)
+            .await?;
+
+            // Insert individual property entries for query
+            for (prop_name, entry) in &family.properties {
+                for value in &entry.values {
+                    sqlx::query(
+                        "INSERT INTO molecule_family_properties (family_id, property_name, value, source, frozen, timestamp)
+                         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING"
+                    )
+                    .bind(family.id)
+                    .bind(prop_name)
+                    .bind(value.value)
+                    .bind(&value.source)
+                    .bind(value.frozen)
+                    .bind(value.timestamp)
+                    .execute(pool)
+                    .await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn link_step_family(&self, step_id: Uuid, family_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(pool) = &self.pool {
+            sqlx::query(
+                "INSERT INTO workflow_step_family (step_id, family_id) VALUES ($1,$2) ON CONFLICT DO NOTHING"
+            )
+            .bind(step_id)
+            .bind(family_id)
+            .execute(pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn get_family(&self, id: Uuid) -> Result<Option<MoleculeFamily>, Box<dyn std::error::Error>> {
+        if let Some(pool) = &self.pool {
+            let row = sqlx::query!("SELECT id, name, description, molecules, properties, parameters, source_provider FROM molecule_families WHERE id = $1", id)
+                .fetch_optional(pool)
+                .await?;
+            if let Some(r) = row {
+                let molecules_val = r.molecules; // NOT NULL column
+                let properties_val = r.properties; // NOT NULL
+                let parameters_val = r.parameters; // NOT NULL
+                let source_provider_val = r.source_provider.unwrap_or(serde_json::json!(null));
+                let family = MoleculeFamily {
+                    id: r.id,
+                    name: r.name,
+                    description: r.description,
+                    molecules: serde_json::from_value(molecules_val)?,
+                    properties: serde_json::from_value(properties_val)?,
+                    parameters: serde_json::from_value(parameters_val)?,
+                    source_provider: serde_json::from_value(source_provider_val)?,
+                };
+                return Ok(Some(family));
+            }
+        }
+        Ok(None)
+    }
+
     pub async fn get_execution(&self, execution_id: Uuid) -> Result<Vec<StepExecutionInfo>, Box<dyn std::error::Error>> {
         // Prefer in-memory
         let guard = self.in_memory.read().await;
@@ -73,6 +150,19 @@ impl WorkflowExecutionRepository {
     pub async fn save_step_for_branch(&self, _step: &(), _branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }
+
+    /// Gathers all step executions matching a given root_execution_id (in-memory only for now).
+    pub async fn get_steps_by_root(&self, root_id: Uuid) -> Vec<StepExecutionInfo> {
+        let guard = self.in_memory.read().await;
+        let mut collected = Vec::new();
+        for vec_exec in guard.values() {
+            for exec in vec_exec {
+                if exec.root_execution_id == root_id { collected.push(exec.clone()); }
+            }
+        }
+        collected.sort_by_key(|e| e.start_time);
+        collected
+    }
 }
 
 #[cfg(test)]
@@ -93,6 +183,9 @@ mod tests {
             start_time: Utc::now(),
             end_time: Utc::now(),
             status: StepStatus::Completed,
+            root_execution_id: Uuid::new_v4(),
+            parent_step_id: None,
+            branch_from_step_id: None,
         };
         
         // Test save_step_execution
@@ -118,6 +211,12 @@ mod tests {
         
         // Test save_step_for_branch
         repo.save_step_for_branch(&(), Uuid::new_v4()).await.unwrap();
+
+    // Call get_family (will be None in in-memory mode without persisted DB pool)
+    let _none = repo.get_family(Uuid::new_v4()).await.unwrap();
+        // Test get_steps_by_root (should find entries for existing root ids)
+        let list = repo.get_steps_by_root(execution_info.root_execution_id).await;
+        assert!(!list.is_empty());
     }
 }
 
@@ -131,23 +230,24 @@ mod repository_usage_tests {
     #[tokio::test]
     async fn test_repo_all_methods() {
     let repo = WorkflowExecutionRepository::new(true);
-        let info = StepExecutionInfo { step_id: Uuid::new_v4(), parameters: HashMap::new(), providers_used: Vec::new(), start_time: Utc::now(), end_time: Utc::now(), status: StepStatus::Pending };
+    let info = StepExecutionInfo { step_id: Uuid::new_v4(), parameters: HashMap::new(), providers_used: Vec::new(), start_time: Utc::now(), end_time: Utc::now(), status: StepStatus::Pending, root_execution_id: Uuid::new_v4(), parent_step_id: None, branch_from_step_id: None };
         repo.save_step_execution(&info).await.unwrap();
         let all = repo.get_execution(info.step_id).await.unwrap();
         assert_eq!(all.len(), 1);
         let one = repo.get_step_execution(info.step_id, 0).await.unwrap();
         assert_eq!(one.step_id, info.step_id);
         let branch = Uuid::new_v4();
-        repo.save_step_execution_for_branch(&info, branch).await.unwrap();
+    repo.save_step_execution_for_branch(&info, branch).await.unwrap();
         let branched = repo.get_execution(branch).await.unwrap();
         assert_eq!(branched.len(), 1);
         let _ = repo.get_step(Uuid::new_v4()).await;
         repo.save_step_for_branch(&(), Uuid::new_v4()).await.unwrap();
+    let _none = repo.get_family(Uuid::new_v4()).await.unwrap();
+    let _by_root = repo.get_steps_by_root(info.root_execution_id).await;
     }
 }
 
-// Dummy async function to use repository methods and avoid dead_code
-#[allow(dead_code)]
+
 async fn _use_repository_methods() {
     use crate::workflow::step::{StepExecutionInfo, StepStatus};
     use chrono::Utc;
@@ -163,6 +263,9 @@ async fn _use_repository_methods() {
         start_time: Utc::now(),
         end_time: Utc::now(),
         status: StepStatus::Completed,
+        root_execution_id: Uuid::new_v4(),
+        parent_step_id: None,
+        branch_from_step_id: None,
     };
     let _ = repo.save_step_execution(&info).await;
     let _ = repo.get_execution(id).await;
