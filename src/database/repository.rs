@@ -120,6 +120,9 @@ impl WorkflowExecutionRepository {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_molecule_family_molecules_inchikey ON molecule_family_molecules(molecule_inchikey)").execute(pool).await?;
         // GIN optional
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflow_step_executions_providers_used_gin ON workflow_step_executions USING GIN (providers_used jsonb_path_ops)").execute(pool).await; // ignorar fallo si extensión no disponible
+    // Normalized property provenance tables (needed so upsert_family transaction doesn't rollback if migrations not applied)
+    sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_providers ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, provider_type TEXT NOT NULL, provider_name TEXT NOT NULL, provider_version TEXT NOT NULL, execution_parameters JSONB NOT NULL DEFAULT '{}'::jsonb, execution_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, execution_id) )").execute(pool).await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS molecule_family_property_steps ( family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, property_name TEXT NOT NULL, step_id UUID NOT NULL, PRIMARY KEY (family_id, property_name, step_id) )").execute(pool).await?;
         Ok(())
     }
 
@@ -128,11 +131,14 @@ impl WorkflowExecutionRepository {
 
     pub async fn upsert_family(&self, family: &MoleculeFamily) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pool) = &self.pool {
+            // Debug: molecule count before
+            let before: Option<i64> = match sqlx::query_as::<_, (i64,)> ("SELECT COUNT(*) FROM molecules").fetch_one(pool).await { Ok((c,)) => Some(c), Err(_) => None };
             // Normalización: usamos transacción para mantener consistencia entre tablas.
             let mut tx = pool.begin().await?;
 
             // 1. Upsert de moléculas individuales (evita duplicados por inchikey).
             for (idx, mol) in family.molecules.iter().enumerate() {
+                eprintln!("[upsert_family] inserting molecule {} ({}/{})", mol.inchikey, idx+1, family.molecules.len());
                 sqlx::query(
                     "INSERT INTO molecules (inchikey, inchi, smiles, common_name) VALUES ($1,$2,$3,$4)
                      ON CONFLICT (inchikey) DO UPDATE SET inchi = EXCLUDED.inchi, smiles = EXCLUDED.smiles, common_name = EXCLUDED.common_name, updated_at = now()"
@@ -154,6 +160,7 @@ impl WorkflowExecutionRepository {
                 .execute(&mut *tx)
                 .await?;
             }
+            eprintln!("[upsert_family] completed molecules link for family {} total={}", family.id, family.molecules.len());
 
             // 2. Upsert de la familia: ahora la columna `molecules` guarda sólo los inchikeys (array JSON) para compatibilidad.
             let inchikeys: Vec<&String> = family.molecules.iter().map(|m| &m.inchikey).collect();
@@ -221,6 +228,7 @@ impl WorkflowExecutionRepository {
             }
 
             tx.commit().await?;
+            if let Some(bc) = before { if let Ok((ac,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool).await { eprintln!("[upsert_family] molecule count before={} after={} delta={} fam_id={}", bc, ac, ac - bc, family.id); } }
         }
         Ok(())
     }

@@ -16,7 +16,35 @@ pub async fn run_migrations() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let pool = PgPoolOptions::new().max_connections(5).connect(&database_url).await?;
+    // Intentar conectar; si la BD no existe (3D000) intentar crearla (replicar lógica simplificada de config::ensure_database_exists)
+    let pool = match PgPoolOptions::new().max_connections(5).connect(&database_url).await {
+        Ok(p) => p,
+        Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("3D000") => {
+            eprintln!("[migrations] Target DB missing. Attempting create...");
+            // Crear DB
+            if let Some(pos) = database_url.rfind('/') {
+                let (base, tail) = database_url.split_at(pos);
+                let db_part = &tail[1..];
+                let db_only = db_part.split('?').next().unwrap_or(db_part);
+                if !db_only.is_empty() {
+                    let admin_url = if base.ends_with("/postgres") || db_only == "postgres" { database_url.clone() } else { format!("{}/postgres", base) };
+                    if let Ok(admin_pool) = PgPoolOptions::new().max_connections(1).connect(&admin_url).await {
+                        let exists: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pg_database WHERE datname = $1").bind(db_only).fetch_one(&admin_pool).await?;
+                        if exists.0 == 0 {
+                            if db_only.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c=='-') {
+                                let create_stmt = format!("CREATE DATABASE \"{}\"", db_only.replace('"', ""));
+                                admin_pool.execute(sqlx::query(&create_stmt)).await?;
+                                eprintln!("[migrations] Database '{}' created", db_only);
+                            } else { eprintln!("[migrations] Unsafe db name, abort auto-create: {}", db_only); }
+                        }
+                    }
+                }
+            }
+            // Reintentar conexión
+            PgPoolOptions::new().max_connections(5).connect(&database_url).await?
+        },
+        Err(e) => return Err(Box::new(e)),
+    };
 
     // Ensure table exists
     sqlx::query(

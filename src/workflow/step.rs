@@ -226,6 +226,7 @@ impl WorkflowStep for MoleculeAcquisitionStep {
             "properties": family.properties.keys().collect::<Vec<_>>(),
             "parameters": family.parameters,
         })).into() { family.family_hash = Some(h); }
+    // Nota: la persistencia real la hace el WorkflowManager post-ejecución; este comentario aclara.
         
         Ok(StepOutput {
             families: vec![family],

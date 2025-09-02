@@ -148,6 +148,7 @@ impl WorkflowManager {
     // Ajustamos tiempos reales.
     output.execution_info.start_time = start_time;
     output.execution_info.end_time = chrono::Utc::now();
+
         
         // 4. Enriquecer metadata de ejecución con contexto global de workflow (root, parent, branch).
     let mut exec = output.execution_info.clone();
@@ -186,7 +187,11 @@ impl WorkflowManager {
             }
             // Recalcular hash (internamente usa inchikeys + parámetros + propiedades + flags).
             fam.recompute_hash();
-            let _ = self.execution_repo.upsert_family(fam).await; // ignorar errores en flujo principal
+            if let Err(e) = self.execution_repo.upsert_family(fam).await {
+                eprintln!("[persist][family] Error upserting family {}: {e}", fam.id);
+            } else {
+                eprintln!("[persist][family] Upsert ok family {} molecules={} props={} frozen={} hash={:?}", fam.id, fam.molecules.len(), fam.properties.len(), fam.frozen, fam.family_hash);
+            }
             let _ = self.execution_repo.link_step_family(exec.step_id, fam.id).await;
         }
 
@@ -199,6 +204,17 @@ impl WorkflowManager {
                 "property"
             } else { "raw" };
             let _ = self.execution_repo.upsert_step_results_typed(exec.step_id, &output.results, result_type).await;
+        }
+        // Snapshot adicional: conteo de moléculas insertadas tras persistencia (solo si provider_type molecule)
+        if exec.providers_used.iter().any(|p| p.provider_type == "molecule") {
+            if let Some(pool) = self.execution_repo.pool() {
+                if let Ok((count_mols,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM molecules").fetch_one(pool).await {
+                    let snap = serde_json::json!({"molecules_total": count_mols, "families_in_step": output.families.len()});
+                    let mut snap_map = std::collections::HashMap::new();
+                    snap_map.insert("snapshot_molecule_counts".to_string(), snap);
+                    let _ = self.execution_repo.upsert_step_results_typed(exec.step_id, &snap_map, "snapshot").await;
+                }
+            }
         }
         
     // 8. Resultado final con familias y snapshot de ejecución completamente contextualizado.

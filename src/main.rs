@@ -222,9 +222,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dp = InlineCountProv;
     let _total = dp.calculate(&properties_output.families, &HashMap::new()).await?;
 
-    // ---------------------------------------------------------------------
-    // (15) Ejemplo ampliado: ejecución step-by-step con referencias para branching
-    // ---------------------------------------------------------------------
     println!("\n=== Ejecución step-by-step con referencias y branching manual + auto ===");
     manager.start_new_flow();
     let mut recorded_step_ids: Vec<Uuid> = Vec::new();
