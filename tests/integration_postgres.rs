@@ -47,6 +47,8 @@ impl WorkflowStep for AggregationLikeStep {
         Ok(StepOutput { families: vec![],
                         results,
                         execution_info: StepExecutionInfo { step_id: self.id,
+                                                            step_name: self.get_name().to_string(),
+                                                            step_description: self.get_description().to_string(),
                                                             parameters: HashMap::new(),
                                                             parameter_hash: Some(chemflow_rust::database::repository::compute_sorted_hash(&HashMap::<String, serde_json::Value>::new())),
                                                             providers_used: vec![],

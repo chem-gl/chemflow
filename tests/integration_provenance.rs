@@ -54,6 +54,8 @@ impl WorkflowStep for PropStep {
         Ok(StepOutput { families: input.families.clone(),
                         results: HashMap::new(),
                         execution_info: StepExecutionInfo { step_id: self.id,
+                                                            step_name: self.name.into(),
+                                                            step_description: self.get_description().into(),
                                                             parameters: input.parameters.clone(),
                                                             parameter_hash: Some(chemflow_rust::database::repository::compute_sorted_hash(&input.parameters)),
                                                             providers_used: Vec::new(),

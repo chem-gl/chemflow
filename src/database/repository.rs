@@ -54,7 +54,7 @@ fn canonical_json(v: &serde_json::Value) -> String {
 #[derive(Clone)]
 pub struct WorkflowExecutionRepository {
     in_memory: std::sync::Arc<tokio::sync::RwLock<HashMap<Uuid, Vec<StepExecutionInfo>>>>,
-    pool: Option<sqlx::Pool<sqlx::Postgres>>,
+    pub pool: Option<sqlx::Pool<sqlx::Postgres>>,
 }
 
 impl WorkflowExecutionRepository {
@@ -79,30 +79,104 @@ impl WorkflowExecutionRepository {
             // Asegura que las tablas básicas existan (defensa ante BD recién creada sin
             // migraciones aplicadas).
             self.ensure_core_schema(pool).await?;
+            // Calcular integrity_ok si no viene seteado (compara hash almacenado con hash recomputado de parámetros)
+            let integrity_status = execution.integrity_ok.unwrap_or_else(|| {
+                if let Some(h) = &execution.parameter_hash { h == &compute_sorted_hash(&execution.parameters) } else { true }
+            });
             // 2. Persistencia en PostgreSQL: la tabla workflow_step_executions debe existir
             //    (creada por migraciones). ON CONFLICT permite actualizar estado y
             //    parámetros si se re-ejecuta un step o cambia su estado (ej: Running ->
             //    Completed).
-            sqlx::query(
-                        "INSERT INTO workflow_step_executions (step_id, name, description, status, parameters, providers_used, start_time, end_time, parameter_hash)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-              ON CONFLICT (step_id) DO UPDATE SET status = EXCLUDED.status, end_time = EXCLUDED.end_time, parameters = EXCLUDED.parameters, providers_used = EXCLUDED.providers_used, parameter_hash = EXCLUDED.parameter_hash",
-            ).bind(execution.step_id)
-             .bind("step") // placeholder name (extend model to include name/description later)
-             .bind("")
+                        let failure_message: Option<String> = match &execution.status { StepStatus::Failed(msg) => Some(msg.clone()), _ => None };
+                        let insert_res = sqlx::query(
+                                "INSERT INTO workflow_step_executions (step_id, name, description, status, failure_message, parameters, providers_used, start_time, end_time, parameter_hash, root_execution_id, parent_step_id, branch_from_step_id, input_family_ids, input_snapshot, step_config, integrity_ok)
+                                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+                                 ON CONFLICT (step_id) DO UPDATE SET \
+                                     name = EXCLUDED.name, \
+                                     description = EXCLUDED.description, \
+                                     status = EXCLUDED.status, \
+                                     failure_message = EXCLUDED.failure_message, \
+                                     end_time = EXCLUDED.end_time, \
+                                     parameters = EXCLUDED.parameters, \
+                                     providers_used = EXCLUDED.providers_used, \
+                                     parameter_hash = EXCLUDED.parameter_hash, \
+                                     root_execution_id = EXCLUDED.root_execution_id, \
+                                     parent_step_id = EXCLUDED.parent_step_id, \
+                                     branch_from_step_id = EXCLUDED.branch_from_step_id, \
+                                     input_family_ids = EXCLUDED.input_family_ids, \
+                                     input_snapshot = EXCLUDED.input_snapshot, \
+                                     step_config = EXCLUDED.step_config, \
+                                     integrity_ok = EXCLUDED.integrity_ok",
+                        ).bind(execution.step_id)
+                         .bind(&execution.step_name)
+                         .bind(&execution.step_description)
              .bind(match &execution.status {
                        StepStatus::Pending => "Pending",
                        StepStatus::Running => "Running",
                        StepStatus::Completed => "Completed",
                        StepStatus::Failed(_) => "Failed",
                    })
+             .bind(&failure_message)
              .bind(serde_json::to_value(&execution.parameters)?)
              .bind(serde_json::to_value(&execution.providers_used)?)
              .bind(execution.start_time)
              .bind(execution.end_time)
              .bind(&execution.parameter_hash)
+                 .bind(execution.root_execution_id)
+                 .bind(execution.parent_step_id)
+                 .bind(execution.branch_from_step_id)
+                 .bind(serde_json::to_value(&execution.input_family_ids)?)
+                  .bind(execution.input_snapshot.as_ref().map(serde_json::to_value).transpose()?)
+                  .bind(execution.step_config.as_ref().map(serde_json::to_value).transpose()?)
+                  .bind(integrity_status)
              .execute(pool)
-             .await?;
+             .await;
+            if let Err(e) = insert_res {
+                // Si la columna input_snapshot aún no existe (BD antigua), reintentar sin ella.
+                if let Some(db_err) = e.as_database_error() { if db_err.code().map(|c| c == "42703").unwrap_or(false) {
+                    sqlx::query(
+                        "INSERT INTO workflow_step_executions (step_id, name, description, status, failure_message, parameters, providers_used, start_time, end_time, parameter_hash, root_execution_id, parent_step_id, branch_from_step_id, input_family_ids, step_config, integrity_ok)
+                         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                         ON CONFLICT (step_id) DO UPDATE SET \
+                             name = EXCLUDED.name, \
+                             description = EXCLUDED.description, \
+                             status = EXCLUDED.status, \
+                             failure_message = EXCLUDED.failure_message, \
+                             end_time = EXCLUDED.end_time, \
+                             parameters = EXCLUDED.parameters, \
+                             providers_used = EXCLUDED.providers_used, \
+                             parameter_hash = EXCLUDED.parameter_hash, \
+                             root_execution_id = EXCLUDED.root_execution_id, \
+                             parent_step_id = EXCLUDED.parent_step_id, \
+                             branch_from_step_id = EXCLUDED.branch_from_step_id, \
+                             input_family_ids = EXCLUDED.input_family_ids, \
+                             step_config = EXCLUDED.step_config, \
+                             integrity_ok = EXCLUDED.integrity_ok"
+                    ).bind(execution.step_id)
+                     .bind(&execution.step_name)
+                     .bind(&execution.step_description)
+                     .bind(match &execution.status {
+                         StepStatus::Pending => "Pending",
+                         StepStatus::Running => "Running",
+                         StepStatus::Completed => "Completed",
+                         StepStatus::Failed(_) => "Failed",
+                     })
+                     .bind(&failure_message)
+                     .bind(serde_json::to_value(&execution.parameters)?)
+                     .bind(serde_json::to_value(&execution.providers_used)?)
+                     .bind(execution.start_time)
+                     .bind(execution.end_time)
+                     .bind(&execution.parameter_hash)
+                     .bind(execution.root_execution_id)
+                     .bind(execution.parent_step_id)
+                     .bind(execution.branch_from_step_id)
+                     .bind(serde_json::to_value(&execution.input_family_ids)?)
+                     .bind(execution.step_config.as_ref().map(serde_json::to_value).transpose()?)
+                     .bind(integrity_status)
+                     .execute(pool)
+                     .await?;
+                } else { return Err(e.into()); }}
+            }
         }
         Ok(())
     }
@@ -110,7 +184,16 @@ impl WorkflowExecutionRepository {
     async fn ensure_core_schema(&self, pool: &sqlx::Pool<sqlx::Postgres>) -> Result<(), Box<dyn std::error::Error>> {
         // Creamos tablas críticas con IF NOT EXISTS para ser idempotente.
         // 0001
-        sqlx::query("CREATE TABLE IF NOT EXISTS workflow_step_executions ( step_id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, status TEXT NOT NULL, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, providers_used JSONB NOT NULL DEFAULT '[]'::jsonb, start_time TIMESTAMPTZ NOT NULL, end_time TIMESTAMPTZ NOT NULL, parameter_hash TEXT )").execute(pool).await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS workflow_step_executions ( step_id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, status TEXT NOT NULL, failure_message TEXT NULL, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, providers_used JSONB NOT NULL DEFAULT '[]'::jsonb, start_time TIMESTAMPTZ NOT NULL, end_time TIMESTAMPTZ NOT NULL, parameter_hash TEXT, input_snapshot JSONB, step_config JSONB, integrity_ok BOOLEAN )").execute(pool).await?;
+    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS failure_message TEXT").execute(pool).await;
+        // Añadir columnas nuevas para branching/lineage si no existen
+    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS root_execution_id UUID").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS parent_step_id UUID").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS branch_from_step_id UUID").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS input_family_ids JSONB").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS input_snapshot JSONB").execute(pool).await; // new snapshot column
+    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS step_config JSONB").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE workflow_step_executions ADD COLUMN IF NOT EXISTS integrity_ok BOOLEAN").execute(pool).await;
         sqlx::query("CREATE TABLE IF NOT EXISTS molecule_families ( id UUID PRIMARY KEY, name TEXT NOT NULL, description TEXT, molecules JSONB NOT NULL DEFAULT '[]'::jsonb, properties JSONB NOT NULL DEFAULT '{}'::jsonb, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, provenance JSONB, frozen BOOLEAN NOT NULL DEFAULT FALSE, frozen_at TIMESTAMPTZ NULL, family_hash TEXT )").execute(pool).await?;
         // 0002 link
         sqlx::query("CREATE TABLE IF NOT EXISTS workflow_step_family ( step_id UUID NOT NULL REFERENCES workflow_step_executions(step_id) ON DELETE CASCADE, family_id UUID NOT NULL REFERENCES molecule_families(id) ON DELETE CASCADE, PRIMARY KEY (step_id, family_id) )").execute(pool).await?;
@@ -439,6 +522,72 @@ impl WorkflowExecutionRepository {
         collected.sort_by_key(|e| e.start_time);
         collected
     }
+
+    /// Verifica integridad recomputando hash de parámetros y comparando (solo in-memory).
+    pub async fn verify_execution_integrity(&self, step_id: Uuid) -> Option<bool> {
+        if let Ok(entries) = self.get_execution(step_id).await { if let Some(last) = entries.last() {
+            if let Some(h) = &last.parameter_hash { return Some(h == &compute_sorted_hash(&last.parameters)); }
+        }}
+        None
+    }
+
+    /// Construye estructura en árbol (mapa parent->children) desde root_id.
+    pub async fn build_branch_tree(&self, root_id: Uuid) -> serde_json::Value {
+        let steps = self.get_steps_by_root(root_id).await;
+        let mut children: HashMap<Uuid, Vec<&StepExecutionInfo>> = HashMap::new();
+        for s in &steps { if let Some(parent) = s.parent_step_id { children.entry(parent).or_default().push(s); } }
+        fn build(node: &StepExecutionInfo, map: &HashMap<Uuid, Vec<&StepExecutionInfo>>) -> serde_json::Value {
+            let kids = map.get(&node.step_id).cloned().unwrap_or_default();
+            serde_json::json!({
+                "step_id": node.step_id,
+                "name": node.step_name,
+                "children": kids.into_iter().map(|c| build(c, map)).collect::<Vec<_>>()
+            })
+        }
+        // Raíces: aquellos sin parent o que son branch origins.
+        let roots: Vec<&StepExecutionInfo> = steps.iter().filter(|s| s.parent_step_id.is_none()).collect();
+        serde_json::json!(roots.into_iter().map(|r| build(r, &children)).collect::<Vec<_>>())
+    }
+
+    /// Lista valores de una propiedad (flatten) con su provider principal (primer provider registrado) filtrando opcionalmente por provider_name.
+    pub async fn list_property_values(&self, property: &str, provider_filter: Option<&str>) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        if let Some(pool) = &self.pool {
+            let rows = if let Some(pf) = provider_filter {
+                sqlx::query(
+                    "SELECT mfp.family_id, mfp.property_name, mfp.value, mfp.source, mfp.timestamp, prov.provider_name FROM molecule_family_properties mfp LEFT JOIN LATERAL (SELECT provider_name FROM molecule_family_property_providers p WHERE p.family_id = mfp.family_id AND p.property_name = mfp.property_name LIMIT 1) prov ON TRUE WHERE mfp.property_name = $1 AND prov.provider_name = $2"
+                ).bind(property).bind(pf).fetch_all(pool).await.unwrap_or_default()
+            } else {
+                sqlx::query(
+                    "SELECT mfp.family_id, mfp.property_name, mfp.value, mfp.source, mfp.timestamp, prov.provider_name FROM molecule_family_properties mfp LEFT JOIN LATERAL (SELECT provider_name FROM molecule_family_property_providers p WHERE p.family_id = mfp.family_id AND p.property_name = mfp.property_name LIMIT 1) prov ON TRUE WHERE mfp.property_name = $1"
+                ).bind(property).fetch_all(pool).await.unwrap_or_default()
+            };
+            for r in rows {
+                let val = serde_json::json!({
+                    "family_id": r.try_get::<Uuid,_>("family_id").ok(),
+                    "property": r.try_get::<String,_>("property_name").ok(),
+                    "value": r.try_get::<f64,_>("value").ok(),
+                    "source": r.try_get::<Option<String>,_>("source").ok().flatten(),
+                    "timestamp": r.try_get::<chrono::DateTime<chrono::Utc>,_>("timestamp").ok(),
+                    "provider": r.try_get::<Option<String>,_>("provider_name").ok().flatten(),
+                });
+                out.push(val);
+            }
+        }
+        out
+    }
+
+    /// Exporta un reporte consolidado de un root_execution_id con pasos y familias.
+    pub async fn export_workflow_report(&self, root_id: Uuid) -> serde_json::Value {
+        let steps = self.get_steps_by_root(root_id).await;
+        let tree = self.build_branch_tree(root_id).await;
+        serde_json::json!({
+            "root_execution_id": root_id,
+            "steps": steps,
+            "branch_tree": tree,
+            "generated_at": chrono::Utc::now()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -452,7 +601,9 @@ mod tests {
     async fn test_repository_methods() {
         let repo = WorkflowExecutionRepository::new(true);
 
-        let execution_info = StepExecutionInfo { step_id: Uuid::new_v4(),
+    let execution_info = StepExecutionInfo { step_id: Uuid::new_v4(),
+                         step_name: "test".into(),
+                         step_description: "repo test".into(),
                                                  parameters: HashMap::new(),
                                                  parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
                                                  providers_used: Vec::new(),
@@ -462,7 +613,10 @@ mod tests {
                                                  root_execution_id: Uuid::new_v4(),
                                                  parent_step_id: None,
                                                  branch_from_step_id: None,
-                                                 input_family_ids: Vec::new() };
+                         input_family_ids: Vec::new(),
+                         input_snapshot: None,
+                         step_config: None,
+                         integrity_ok: None };
 
         // Test save_step_execution
         repo.save_step_execution(&execution_info).await.unwrap();
@@ -508,7 +662,9 @@ mod repository_usage_tests {
     #[tokio::test]
     async fn test_repo_all_methods() {
         let repo = WorkflowExecutionRepository::new(true);
-        let info = StepExecutionInfo { step_id: Uuid::new_v4(),
+    let info = StepExecutionInfo { step_id: Uuid::new_v4(),
+                       step_name: "test".into(),
+                       step_description: "repo usage".into(),
                                        parameters: HashMap::new(),
                                        parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
                                        providers_used: Vec::new(),
@@ -518,7 +674,10 @@ mod repository_usage_tests {
                                        root_execution_id: Uuid::new_v4(),
                                        parent_step_id: None,
                                        branch_from_step_id: None,
-                                       input_family_ids: Vec::new() };
+                                       input_family_ids: Vec::new(),
+                                       input_snapshot: None,
+                                       step_config: None,
+                                       integrity_ok: None };
         repo.save_step_execution(&info).await.unwrap();
         let all = repo.get_execution(info.step_id).await.unwrap();
         assert_eq!(all.len(), 1);
@@ -546,6 +705,8 @@ async fn _use_repository_methods() {
     let repo = WorkflowExecutionRepository::new(true);
     let id = Uuid::new_v4();
     let info = StepExecutionInfo { step_id: id,
+                                   step_name: "example".into(),
+                                   step_description: "usage".into(),
                                    parameters: HashMap::new(),
                                    parameter_hash: Some(compute_sorted_hash(&serde_json::json!({}))),
                                    providers_used: Vec::new(),
@@ -555,7 +716,10 @@ async fn _use_repository_methods() {
                                    root_execution_id: Uuid::new_v4(),
                                    parent_step_id: None,
                                    branch_from_step_id: None,
-                                   input_family_ids: Vec::new() };
+                                   input_family_ids: Vec::new(),
+                                   input_snapshot: None,
+                                   step_config: None,
+                                   integrity_ok: None };
     let _ = repo.save_step_execution(&info).await;
     let _ = repo.get_execution(id).await;
     let _ = repo.get_step_execution(id, 0).await;

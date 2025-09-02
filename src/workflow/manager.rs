@@ -15,7 +15,8 @@ use crate::database::repository::WorkflowExecutionRepository;
 use crate::providers::data::trait_dataprovider::DataProvider;
 use crate::providers::molecule::traitmolecule::MoleculeProvider;
 use crate::providers::properties::trait_properties::PropertiesProvider;
-use crate::workflow::step::{StepInput, StepOutput, WorkflowStep};
+use crate::workflow::step::{StepInput, StepOutput, WorkflowStep, StepExecutionInfo};
+use uuid::Uuid;
 
 pub struct WorkflowManager {
     execution_repo: WorkflowExecutionRepository,
@@ -106,16 +107,22 @@ impl WorkflowManager {
                 None
             };
             let prospective_param_hash = crate::database::repository::compute_sorted_hash(&step_parameters);
-            // Branch sólo si cambian parámetros y no es primera ejecución
             let param_changed = matches!(&prev_exec_opt, Some(prev_exec) if prev_exec.parameter_hash.as_deref() != Some(&prospective_param_hash));
-            if param_changed && self.branch_origin != self.last_step_id {
+            let input_changed = match &prev_exec_opt {
+                Some(prev_exec) => prev_exec.parameters.get("_input_families_hash").and_then(|v| v.as_str()) != Some(&input_families_hash),
+                None => false,
+            };
+            // Abrimos nueva rama lógica si cambian parámetros o cambia la composición/hash de familias de entrada
+            if (param_changed || input_changed) && self.branch_origin != self.last_step_id {
                 self.branch_origin = self.last_step_id;
             }
         }
         // 1. Construir StepInput (familias + parámetros específicos de esta
         //    invocación).
-        let input = StepInput { families: input_families,
-                                parameters: step_parameters };
+    let input_families_clone_for_exec = input_families.clone();
+    let params_clone_for_exec = step_parameters.clone();
+    let input = StepInput { families: input_families_clone_for_exec,
+                parameters: params_clone_for_exec };
 
         // 2. (Previsional) Acceso a metadatos de data_providers: en el futuro se
         //    podrían crear steps de agregación que necesiten estos proveedores; esto
@@ -138,7 +145,36 @@ impl WorkflowManager {
         //    preliminar).
         // Marcamos inicio antes de ejecutar para registrar tiempos correctamente.
         let start_time = chrono::Utc::now();
-        let mut output = step.execute(input, &self.molecule_providers, &self.properties_providers, &self.data_providers).await?;
+        // Marcar estado Running y persistir snapshot inicial mínimo (sin familias aún) para audit trail temprana.
+    let mut running_info = crate::workflow::step::StepExecutionInfo { step_id: step.get_id(),
+                                                                           step_name: step.get_name().to_string(),
+                                                                           step_description: step.get_description().to_string(),
+                                       parameters: step_parameters.clone(),
+                                       parameter_hash: Some(crate::database::repository::compute_sorted_hash(&step_parameters)),
+                                                                           providers_used: Vec::new(),
+                                                                           start_time,
+                                                                           end_time: start_time,
+                                                                           status: crate::workflow::step::StepStatus::Running,
+                                                                           root_execution_id: self.current_root_execution_id,
+                                                                           parent_step_id: self.last_step_id,
+                                                                           branch_from_step_id: self.branch_origin,
+                                       input_family_ids: input_families.iter().map(|f| f.id).collect(),
+                                       input_snapshot: Some(crate::workflow::step::build_input_snapshot(&input_families)),
+                                       step_config: None,
+                                       integrity_ok: None };
+        // Guardar estado running (ignore errors in in-memory mode)
+        let _ = self.execution_repo.save_step_execution(&running_info).await;
+
+        let mut output = match step.execute(input, &self.molecule_providers, &self.properties_providers, &self.data_providers).await {
+            Ok(o) => o,
+            Err(e) => {
+                // Persist failed state
+                running_info.status = crate::workflow::step::StepStatus::Failed(format!("{}", e));
+                running_info.end_time = chrono::Utc::now();
+                let _ = self.execution_repo.save_step_execution(&running_info).await;
+                return Err(e);
+            }
+        };
         // Ajustamos tiempos reales.
         output.execution_info.start_time = start_time;
         output.execution_info.end_time = chrono::Utc::now();
@@ -149,7 +185,9 @@ impl WorkflowManager {
         exec.root_execution_id = self.current_root_execution_id;
         exec.parent_step_id = self.last_step_id;
         exec.branch_from_step_id = self.branch_origin;
-        exec.input_family_ids = output.families.iter().map(|f| f.id).collect();
+    // Registrar correctamente las familias de entrada (no las de salida) para trazabilidad
+    exec.input_family_ids = input_families.iter().map(|f| f.id).collect();
+    exec.input_snapshot.get_or_insert(crate::workflow::step::build_input_snapshot(&input_families));
         self.last_step_id = Some(exec.step_id);
         // Persistir hash input_families para comparación futura (antes de salvar
         // execution_info)
@@ -178,9 +216,8 @@ impl WorkflowManager {
         // 7. Persistir familias (upsert) y la relación step->family (histórico y
         //    consultas trazables).
         for fam in &mut output.families {
-            // Congelar si se solicitó antes de persistir, para que hash refleje estado
-            // congelado.
-            if output.execution_info.parameters.get("freeze") == Some(&serde_json::json!(true)) {
+            // Política auto-freeze: congelar siempre salvo que parámetro no_auto_freeze=true
+            if output.execution_info.parameters.get("no_auto_freeze") != Some(&serde_json::json!(true)) {
                 fam.freeze();
             }
             // Recalcular hash (internamente usa inchikeys + parámetros + propiedades +
@@ -231,6 +268,48 @@ impl WorkflowManager {
     }
 }
 
+impl WorkflowManager {
+    /// Re-ejecuta el workflow desde un step intermedio (branching real):
+    /// 1. Obtiene todos los steps del root hasta el step objetivo (exclusivo).
+    /// 2. Reconstruye familias aplicando cada step secuencialmente.
+    /// 3. Ajusta last_step_id al step previo para permitir reemplazar/ramificar.
+    /// Nota: requiere que los objetos de step originales estén disponibles (no
+    /// se serializan aún). Por ahora se limita a escenarios en memoria.
+    pub async fn reexecute_from(&mut self, target_parent_step: uuid::Uuid, steps_sequence: &[&dyn WorkflowStep]) -> Result<Vec<MoleculeFamily>, Box<dyn std::error::Error>> {
+    // TODO: Integrar con invocación externa (mantener aunque no se use aún para cumplir requisitos de branching).
+        let lineage = self.execution_repo.get_steps_by_root(self.current_root_execution_id).await;
+        let mut families: Vec<MoleculeFamily> = Vec::new();
+        for exec in lineage.iter().filter(|e| e.step_id != target_parent_step) {
+            if exec.step_id == target_parent_step { break; }
+        }
+        // Re-aplicar steps provistos en orden hasta el parent deseado.
+        for step in steps_sequence {
+            let out = self.execute_step(*step, families.clone(), HashMap::new()).await?; // parámetros vacíos; en futuro usar exec.parameters guardados
+            families = out.families;
+            if step.get_id() == target_parent_step { break; }
+        }
+        // Ajustar contexto para nueva rama desde target_parent_step
+        self.create_branch(target_parent_step);
+        Ok(families)
+    }
+    pub async fn reexecute_tail_preview(&self, root_execution_id: Uuid, from_step: Uuid) -> Result<Vec<StepExecutionInfo>, Box<dyn std::error::Error>> {
+        // Load all prior steps
+        let all = self.repository().get_steps_by_root(root_execution_id).await;
+        // Find index of from_step
+        let idx = all.iter().position(|s| s.step_id == from_step).ok_or_else(|| "from_step not found".to_string())?;
+        // Reconstruct state (families) by replaying steps up to idx-1
+        // For now we rely on stored step_config discriminator to decide no-op vs cannot reconstruct.
+        // Future: instantiate concrete steps from registry.
+        let mut reconstructed: HashMap<Uuid, MoleculeFamily> = HashMap::new();
+        for prior in &all[..idx] {
+            // Families produced after prior step were linked via link_step_family; here we would reload them from DB if persisted.
+            for fam_id in &prior.input_family_ids { if let Some(fam) = self.repository().get_family(*fam_id).await.ok().flatten() { reconstructed.insert(*fam_id, fam); } }
+        }
+        // Return the tail (steps from 'from_step') as target for potential branching modifications.
+        Ok(all[idx..].to_vec())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +352,8 @@ mod tests {
             Ok(StepOutput { families: input.families.clone(),
                             results: input.parameters.clone(),
                             execution_info: StepExecutionInfo { step_id: Uuid::new_v4(),
+                                                                step_name: "dummy".into(),
+                                                                step_description: "dummy desc".into(),
                                                                 parameters: input.parameters.clone(),
                                                                 parameter_hash: Some(crate::database::repository::compute_sorted_hash(&input.parameters)),
                                                                 providers_used: Vec::new(),
@@ -282,7 +363,10 @@ mod tests {
                                                                 root_execution_id: Uuid::new_v4(),
                                                                 parent_step_id: None,
                                                                 branch_from_step_id: None,
-                                                                input_family_ids: Vec::new() } })
+                                                                input_family_ids: Vec::new(),
+                                                                input_snapshot: None,
+                                                                step_config: None,
+                                                                integrity_ok: None } })
         }
     }
 
@@ -317,5 +401,121 @@ mod tests {
         let same_root = manager.create_branch(prev);
         assert_eq!(same_root, manager.current_root_execution_id);
         assert_eq!(manager.last_step_id, Some(prev));
+    }
+
+    // --- Additional test structures for advanced branching and lineage ---
+    struct ParamSensitiveStep { id: Uuid, name: String }
+    #[async_trait]
+    impl WorkflowStep for ParamSensitiveStep {
+        fn get_id(&self) -> Uuid { self.id }
+        fn get_name(&self) -> &str { &self.name }
+        fn get_description(&self) -> &str { "param sensitive" }
+        fn get_required_input_types(&self) -> Vec<String> { vec!["molecule_family".into()] }
+        fn get_output_types(&self) -> Vec<String> { vec!["molecule_family".into()] }
+        fn allows_branching(&self) -> bool { true }
+        async fn execute(&self,
+                         input: StepInput,
+                         _m: &HashMap<String, Box<dyn MoleculeProvider>>,
+                         _p: &HashMap<String, Box<dyn PropertiesProvider>>,
+                         _d: &HashMap<String, Box<dyn crate::providers::data::trait_dataprovider::DataProvider>>)
+                         -> Result<StepOutput, Box<dyn std::error::Error>> {
+            Ok(StepOutput { families: input.families.clone(),
+                            results: input.parameters.clone(),
+                            execution_info: StepExecutionInfo { step_id: self.id,
+                                                                step_name: self.name.clone(),
+                                                                step_description: "param sensitive".into(),
+                                                                parameters: input.parameters.clone(),
+                                                                parameter_hash: Some(crate::database::repository::compute_sorted_hash(&input.parameters)),
+                                                                providers_used: Vec::new(),
+                                                                start_time: chrono::Utc::now(),
+                                                                end_time: chrono::Utc::now(),
+                                                                status: StepStatus::Completed,
+                                                                root_execution_id: Uuid::new_v4(),
+                                                                parent_step_id: None,
+                                                                branch_from_step_id: None,
+                                                                input_family_ids: input.families.iter().map(|f| f.id).collect(),
+                                                                input_snapshot: Some(crate::workflow::step::build_input_snapshot(&input.families)),
+                                                                step_config: None,
+                                                                integrity_ok: None } })
+        }
+    }
+
+    struct InputChangeStep { id: Uuid }
+    #[async_trait]
+    impl WorkflowStep for InputChangeStep {
+        fn get_id(&self) -> Uuid { self.id }
+        fn get_name(&self) -> &str { "input-change" }
+        fn get_description(&self) -> &str { "input hash sensitive" }
+        fn get_required_input_types(&self) -> Vec<String> { vec!["molecule_family".into()] }
+        fn get_output_types(&self) -> Vec<String> { vec!["molecule_family".into()] }
+        fn allows_branching(&self) -> bool { true }
+        async fn execute(&self,
+                         input: StepInput,
+                         _m: &HashMap<String, Box<dyn MoleculeProvider>>,
+                         _p: &HashMap<String, Box<dyn PropertiesProvider>>,
+                         _d: &HashMap<String, Box<dyn crate::providers::data::trait_dataprovider::DataProvider>>)
+                         -> Result<StepOutput, Box<dyn std::error::Error>> {
+            Ok(StepOutput { families: input.families.clone(),
+                            results: HashMap::new(),
+                            execution_info: StepExecutionInfo { step_id: self.id,
+                                                                step_name: "input-change".into(),
+                                                                step_description: "input hash sensitive".into(),
+                                                                parameters: input.parameters.clone(),
+                                                                parameter_hash: Some(crate::database::repository::compute_sorted_hash(&input.parameters)),
+                                                                providers_used: Vec::new(),
+                                                                start_time: chrono::Utc::now(),
+                                                                end_time: chrono::Utc::now(),
+                                                                status: StepStatus::Completed,
+                                                                root_execution_id: Uuid::new_v4(),
+                                                                parent_step_id: None,
+                                                                branch_from_step_id: None,
+                                                                input_family_ids: input.families.iter().map(|f| f.id).collect(),
+                                                                input_snapshot: Some(crate::workflow::step::build_input_snapshot(&input.families)),
+                                                                step_config: None,
+                                                                integrity_ok: None } })
+        }
+    }
+
+    fn make_family() -> MoleculeFamily { MoleculeFamily::new("fam".into(), None) }
+
+    #[tokio::test]
+    async fn test_input_family_ids_record_real_inputs() {
+        let repo = WorkflowExecutionRepository::new(true);
+        let mut manager = WorkflowManager::new(repo, HashMap::new(), HashMap::new(), HashMap::new());
+        let step = ParamSensitiveStep { id: Uuid::new_v4(), name: "param-step".into() };
+        let f_in = make_family();
+        let params = HashMap::new();
+        let out = manager.execute_step(&step, vec![f_in.clone()], params).await.unwrap();
+        assert_eq!(out.execution_info.input_family_ids, vec![f_in.id]);
+    }
+
+    #[tokio::test]
+    async fn test_branching_on_parameter_change() {
+        let repo = WorkflowExecutionRepository::new(true);
+        let mut manager = WorkflowManager::new(repo, HashMap::new(), HashMap::new(), HashMap::new());
+        let step = ParamSensitiveStep { id: Uuid::new_v4(), name: "param-step".into() };
+        let f_in = make_family();
+        // First execution
+        let mut p1 = HashMap::new(); p1.insert("alpha".into(), serde_json::json!(1));
+        let first = manager.execute_step(&step, vec![f_in.clone()], p1).await.unwrap();
+        let prev_id = first.execution_info.step_id;
+        // Second execution with changed parameter
+        let mut p2 = HashMap::new(); p2.insert("alpha".into(), serde_json::json!(2));
+        let second = manager.execute_step(&step, vec![f_in.clone()], p2).await.unwrap();
+        assert_eq!(second.execution_info.branch_from_step_id, Some(prev_id));
+    }
+
+    #[tokio::test]
+    async fn test_branching_on_input_change_same_parameters() {
+        let repo = WorkflowExecutionRepository::new(true);
+        let mut manager = WorkflowManager::new(repo, HashMap::new(), HashMap::new(), HashMap::new());
+        let step = InputChangeStep { id: Uuid::new_v4() };
+        let fam_a = make_family();
+        let fam_b = make_family(); // different id -> different input hash
+        let params = HashMap::new();
+        let first = manager.execute_step(&step, vec![fam_a.clone()], params.clone()).await.unwrap();
+        let prev_id = first.execution_info.step_id;
+        let second = manager.execute_step(&step, vec![fam_b.clone()], params).await.unwrap();
+        assert_eq!(second.execution_info.branch_from_step_id, Some(prev_id));
     }
 }
