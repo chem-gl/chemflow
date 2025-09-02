@@ -9,7 +9,6 @@
 //!   trazabilidad.
 //! - Exponer métodos para iniciar nuevos flujos y crear ramas.
 use std::collections::HashMap;
-
 use crate::data::family::MoleculeFamily;
 use crate::database::repository::WorkflowExecutionRepository;
 use crate::providers::data::trait_dataprovider::DataProvider;
@@ -17,7 +16,6 @@ use crate::providers::molecule::traitmolecule::MoleculeProvider;
 use crate::providers::properties::trait_properties::PropertiesProvider;
 use crate::workflow::step::{StepInput, StepOutput, WorkflowStep, StepExecutionInfo};
 use uuid::Uuid;
-
 pub struct WorkflowManager {
     execution_repo: WorkflowExecutionRepository,
     molecule_providers: HashMap<String, Box<dyn MoleculeProvider>>,
@@ -32,7 +30,6 @@ pub struct WorkflowManager {
     /// línea principal sin branch activo).
     branch_origin: Option<uuid::Uuid>,
 }
-
 impl WorkflowManager {
     pub fn new(execution_repo: WorkflowExecutionRepository,
                molecule_providers: HashMap<String, Box<dyn MoleculeProvider>>,
@@ -47,7 +44,6 @@ impl WorkflowManager {
                last_step_id: None,
                branch_origin: None }
     }
-
     /// Devuelve el identificador raíz del flujo actual.
     pub fn root_execution_id(&self) -> uuid::Uuid {
         self.current_root_execution_id
@@ -60,7 +56,6 @@ impl WorkflowManager {
     pub fn repository(&self) -> &WorkflowExecutionRepository {
         &self.execution_repo
     }
-
     /// Inicia un nuevo flujo independiente, generando un nuevo
     /// root_execution_id y reseteando la cadena de parent/branch. Útil
     /// cuando el usuario desea comenzar una ejecución completamente
@@ -71,7 +66,6 @@ impl WorkflowManager {
         self.branch_origin = None;
         self.current_root_execution_id
     }
-
     /// Crea una rama a partir de un step previo: conserva el root_execution_id
     /// (para agrupar todas las ejecuciones relacionadas) pero marca
     /// branch_origin para que los steps posteriores anoten en su metadata
@@ -82,7 +76,6 @@ impl WorkflowManager {
         self.branch_origin = Some(from_step_id);
         self.current_root_execution_id
     }
-
     pub async fn execute_step(&mut self, step: &dyn WorkflowStep, input_families: Vec<MoleculeFamily>, step_parameters: HashMap<String, serde_json::Value>) -> Result<StepOutput, Box<dyn std::error::Error>> {
         // 0. Auto-branch: si cambia el hash de parámetros O cambia el hash agregado de
         //    familias de entrada -> nueva rama lógica.
@@ -96,7 +89,6 @@ impl WorkflowManager {
                                                                                                       })
                                                                                                   })
                                                                                                   .collect::<Vec<_>>());
-
         if step.allows_branching() {
             let prev_exec_opt = if let Some(prev_id) = self.last_step_id {
                 match self.execution_repo.get_execution(prev_id).await {
@@ -135,7 +127,6 @@ impl WorkflowManager {
     let params_clone_for_exec = step_parameters.clone();
     let input = StepInput { families: input_families_clone_for_exec,
                 parameters: params_clone_for_exec };
-
         // 2. (Previsional) Acceso a metadatos de data_providers: en el futuro se
         //    podrían crear steps de agregación que necesiten estos proveedores; esto
         //    garantiza que la API se use y se detecten cambios tempranamente.
@@ -146,7 +137,6 @@ impl WorkflowManager {
             let _ = prov.get_description();
             let _ = prov.get_available_parameters();
         }
-
         let _ = step.get_id();
         let _ = step.get_name();
         let _ = step.get_description();
@@ -176,7 +166,6 @@ impl WorkflowManager {
                                        integrity_ok: None };
         // Guardar estado running (ignore errors in in-memory mode)
         let _ = self.execution_repo.save_step_execution(&running_info).await;
-
         let mut output = match step.execute(input, &self.molecule_providers, &self.properties_providers, &self.data_providers).await {
             Ok(o) => o,
             Err(e) => {
@@ -190,7 +179,6 @@ impl WorkflowManager {
         // Ajustamos tiempos reales.
         output.execution_info.start_time = start_time;
         output.execution_info.end_time = chrono::Utc::now();
-
         // 4. Enriquecer metadata de ejecución con contexto global de workflow (root,
         //    parent, branch).
         let mut exec = output.execution_info.clone();
@@ -206,10 +194,8 @@ impl WorkflowManager {
     exec.parameters.insert("_input_families_hash".into(), serde_json::json!(input_families_hash));
     // Recompute parameter_hash after mutating parameters to preserve integrity_ok expectations
     exec.parameter_hash = Some(crate::database::repository::compute_sorted_hash(&exec.parameters));
-
         // (Legacy source_provider removal) ahora la provenance inicial se asigna
         // mediante creación explícita en steps de adquisición si fuera necesario.
-
         // Hook: si el step es DataAggregationStep (detectable por output_types).
         // Ejecutar DataProvider real.
         if step.get_output_types().contains(&"aggregation_result".to_string()) && output.execution_info.parameters.get("data_provider").and_then(|v| v.as_str()).and_then(|name| self.data_providers.get(name).map(|_| name)).is_some() {
@@ -220,13 +206,11 @@ impl WorkflowManager {
                 output.results.insert("aggregation".to_string(), result_value);
             }
         }
-
         // 5. Persistir la ejecución (in-memory + opcionalmente DB) para reconstrucción
         //    posterior.
         self.execution_repo.save_step_execution(&exec).await?;
         // 6. Devolver execution_info enriquecido al llamador.
         output.execution_info = exec.clone();
-
         // 7. Persistir familias (upsert) y la relación step->family (histórico y
         //    consultas trazables).
         for fam in &mut output.families {
@@ -249,7 +233,6 @@ impl WorkflowManager {
             }
             let _ = self.execution_repo.link_step_family(exec.step_id, fam.id).await;
         }
-
         // Persistir results individuales distinguiendo el tipo
         // (aggregation/property/raw).
         if !output.results.is_empty() {
@@ -275,13 +258,11 @@ impl WorkflowManager {
                 let _ = self.execution_repo.upsert_step_results_typed(exec.step_id, &snap_map, "snapshot").await;
             }
         }
-
         // 8. Resultado final con familias y snapshot de ejecución completamente
         //    contextualizado.
         Ok(output)
     }
 }
-
 impl WorkflowManager {
     /// Re-ejecuta el workflow desde un step intermedio (branching real):
     /// 1. Obtiene todos los steps del root hasta el step objetivo (exclusivo).
@@ -323,7 +304,6 @@ impl WorkflowManager {
         Ok(all[idx..].to_vec())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,9 +313,7 @@ mod tests {
     use async_trait::async_trait;
     use std::collections::HashMap;
     use uuid::Uuid;
-
     struct DummyStep;
-
     #[async_trait]
     impl WorkflowStep for DummyStep {
         fn get_id(&self) -> Uuid {
@@ -356,7 +334,6 @@ mod tests {
         fn allows_branching(&self) -> bool {
             false
         }
-
         async fn execute(&self,
                          input: StepInput,
                          _m: &HashMap<String, Box<dyn MoleculeProvider>>,
@@ -383,7 +360,6 @@ mod tests {
                                                                 integrity_ok: None } })
         }
     }
-
     #[tokio::test]
     async fn test_execute_step_manager() {
         let repo = WorkflowExecutionRepository::new(true);
@@ -391,18 +367,15 @@ mod tests {
         let props = HashMap::new();
         let data = HashMap::new();
         let mut manager = WorkflowManager::new(repo, mol, props, data);
-
         let dummy = DummyStep;
         let families: Vec<MoleculeFamily> = Vec::new();
         let mut params = HashMap::new();
         params.insert("key".to_string(), serde_json::json!("value"));
-
         let output = manager.execute_step(&dummy, families.clone(), params.clone()).await.expect("manager exec");
         assert_eq!(output.families.len(), families.len());
         assert_eq!(output.results.get("key").unwrap(), &serde_json::json!("value"));
         assert!(matches!(output.execution_info.status, StepStatus::Completed));
     }
-
     #[tokio::test]
     async fn test_branching_methods_usage() {
         let repo = WorkflowExecutionRepository::new(true);
@@ -416,7 +389,6 @@ mod tests {
         assert_eq!(same_root, manager.current_root_execution_id);
         assert_eq!(manager.last_step_id, Some(prev));
     }
-
     // --- Additional test structures for advanced branching and lineage ---
     struct ParamSensitiveStep { id: Uuid, name: String }
     #[async_trait]
@@ -453,7 +425,6 @@ mod tests {
                                                                 integrity_ok: None } })
         }
     }
-
     struct InputChangeStep { id: Uuid }
     #[async_trait]
     impl WorkflowStep for InputChangeStep {
@@ -489,9 +460,7 @@ mod tests {
                                                                 integrity_ok: None } })
         }
     }
-
     fn make_family() -> MoleculeFamily { MoleculeFamily::new("fam".into(), None) }
-
     #[tokio::test]
     async fn test_input_family_ids_record_real_inputs() {
         let repo = WorkflowExecutionRepository::new(true);
@@ -502,7 +471,6 @@ mod tests {
         let out = manager.execute_step(&step, vec![f_in.clone()], params).await.unwrap();
         assert_eq!(out.execution_info.input_family_ids, vec![f_in.id]);
     }
-
     #[tokio::test]
     async fn test_branching_on_parameter_change() {
         let repo = WorkflowExecutionRepository::new(true);
@@ -518,7 +486,6 @@ mod tests {
         let second = manager.execute_step(&step, vec![f_in.clone()], p2).await.unwrap();
         assert_eq!(second.execution_info.branch_from_step_id, Some(prev_id));
     }
-
     #[tokio::test]
     async fn test_branching_on_input_change_same_parameters() {
         let repo = WorkflowExecutionRepository::new(true);

@@ -10,12 +10,10 @@ use chemflow_rust::{
 use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
-
 // Dummy step that emits a result to test result_type persistence
 struct AggregationLikeStep {
     id: Uuid,
 }
-
 #[async_trait]
 impl WorkflowStep for AggregationLikeStep {
     fn get_id(&self) -> Uuid {
@@ -64,7 +62,6 @@ impl WorkflowStep for AggregationLikeStep {
                                 integrity_ok: None } })
     }
 }
-
 #[tokio::test]
 async fn test_postgres_migrations_and_result_type() -> Result<(), Box<dyn std::error::Error>> {
     // Skip if DATABASE_URL not set (CI condition)
@@ -73,7 +70,6 @@ async fn test_postgres_migrations_and_result_type() -> Result<(), Box<dyn std::e
         eprintln!("DATABASE_URL not set; skipping integration test");
         return Ok(());
     }
-
     let pool = sqlx::PgPool::connect(&db_url).await?;
     // Run pending migrations (simple approach: execute each file in order 000*.sql)
     // Assumes tests run from workspace root
@@ -93,7 +89,6 @@ async fn test_postgres_migrations_and_result_type() -> Result<(), Box<dyn std::e
             }
         }
     }
-
     let repo = WorkflowExecutionRepository::with_pool(pool).await;
     // Create a dummy family and persist
     let mut fam = MoleculeFamily::new("Fam".into(), None);

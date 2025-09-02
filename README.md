@@ -53,7 +53,7 @@ DATABASE_MIN_CONNECTIONS=2
 
 ## Migraciones
 
-Coloca los SQL de esquema en `migrations/` (ya existen ejemplos: 0001*\*, 0002*_, 0003\__). Para aplicar migraciones, simplemente ejecuta el binario principal que las corre al inicio:
+Coloca los SQL de esquema en `migrations/` (ya existen ejemplos: 0001*\*, 0002*\_, 0003\_\_). Para aplicar migraciones, simplemente ejecuta el binario principal que las corre al inicio:
 
 ```bash
 cargo run
@@ -67,8 +67,7 @@ El `main.rs`:
 2. Registra proveedores de ejemplo (moléculas y propiedades).
 3. Ejecuta un flujo de adquisición y cálculo de propiedades.
 4. Crea ramas (branch) adicionales demostrativas.
-
-Ejecutar:
+   Ejecutar:
 
 ```bash
 cargo run
@@ -81,8 +80,7 @@ Al ejecutar un step tras `create_branch(step_id_origen)`:
 - `root_execution_id` permanece igual (linaje común).
 - `parent_step_id` apunta al step desde el cual se encadenó la llamada.
 - `branch_from_step_id` se establece al origen de la bifurcación.
-
-Puedes reconstruir el linaje consultando:
+  Puedes reconstruir el linaje consultando:
 
 ```rust
 let steps = repo.get_steps_by_root(root_id).await;
@@ -116,10 +114,8 @@ El test `tests/branching_flow.rs` valida:
 ```bash
 # Formatear
 cargo fmt
-
 # Compilar y testear
 cargo test
-
 # Ejecutar ejemplo
 cargo run
 ```

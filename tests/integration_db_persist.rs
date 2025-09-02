@@ -4,7 +4,6 @@ use chemflow_rust::workflow::manager::WorkflowManager;
 use chemflow_rust::workflow::step::MoleculeAcquisitionStep;
 use serde_json::json;
 use std::collections::HashMap;
-
 #[tokio::test]
 async fn test_persist_molecules_and_snapshot() {
     if std::env::var("DATABASE_URL").is_err() {

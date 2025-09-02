@@ -20,14 +20,12 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-
 use crate::data::family::{MoleculeFamily, ProviderReference};
 use crate::data::types::MolecularData;
 use crate::providers::data::trait_dataprovider::DataProvider;
 use crate::providers::molecule::traitmolecule::MoleculeProvider;
 use crate::providers::properties::trait_properties::PropertiesProvider;
 use serde_json::Value;
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StepInput {
     /// Familias de moléculas de entrada (puede ser vacío si el step genera
@@ -37,7 +35,6 @@ pub struct StepInput {
     /// defaults todavía).
     pub parameters: HashMap<String, serde_json::Value>,
 }
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StepOutput {
     /// Familias de salida resultantes (puede contener las mismas mutadas /
@@ -49,7 +46,6 @@ pub struct StepOutput {
     /// Información de ejecución enriquecida para trazabilidad y branching.
     pub execution_info: StepExecutionInfo,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepExecutionInfo {
     /// Identificador único de este step (cada ejecución concreta tiene su
@@ -96,7 +92,6 @@ pub struct StepExecutionInfo {
     pub step_config: Option<serde_json::Value>,
     pub integrity_ok: Option<bool>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StepStatus {
     /// Creado pero aún no iniciado.
@@ -108,7 +103,6 @@ pub enum StepStatus {
     /// Falló con un mensaje de error.
     Failed(String),
 }
-
 #[async_trait]
 pub trait WorkflowStep: Send + Sync {
     /// Identificador estable del tipo/instancia lógica del step (no de la
@@ -126,7 +120,6 @@ pub trait WorkflowStep: Send + Sync {
     /// Indica si desde este step es lícito bifurcar (crear una rama) al cambiar
     /// parámetros.
     fn allows_branching(&self) -> bool;
-
     /// Ejecuta el step con las familias y parámetros dados, retornando nuevas
     /// familias y la metadata de ejecución. Debe ser puro respecto a los
     /// datos de entrada (no mutar estructuras externas) y garantizar que
@@ -138,7 +131,6 @@ pub trait WorkflowStep: Send + Sync {
                      data_providers: &HashMap<String, Box<dyn DataProvider>>)
                      -> Result<StepOutput, Box<dyn std::error::Error>>;
 }
-
 // ---- Parameter validation helpers ----
 /// Valida y completa parámetros para proveedores de moléculas.
 /// 1. Verifica parámetros requeridos.
@@ -158,7 +150,6 @@ fn validate_parameters(provided: &HashMap<String, Value>, definitions: &HashMap<
     }
     Ok(result)
 }
-
 fn validate_prop_parameters(provided: &HashMap<String, Value>, definitions: &HashMap<String, crate::providers::properties::trait_properties::ParameterDefinition>) -> Result<HashMap<String, Value>, String> {
     let mut result = provided.clone();
     for (k, def) in definitions {
@@ -173,7 +164,6 @@ fn validate_prop_parameters(provided: &HashMap<String, Value>, definitions: &Has
     }
     Ok(result)
 }
-
 fn validate_data_parameters(provided: &HashMap<String, Value>, definitions: &HashMap<String, crate::providers::data::trait_dataprovider::DataParameterDefinition>) -> Result<HashMap<String, Value>, String> {
     let mut result = provided.clone();
     for (k, def) in definitions {
@@ -184,7 +174,6 @@ fn validate_data_parameters(provided: &HashMap<String, Value>, definitions: &Has
     }
     Ok(result)
 }
-
 // Implementaciones concretas de steps
 /// Step que genera una nueva familia de moléculas a partir de un proveedor de
 /// moléculas. No consume familias previas (inicio de flujo o rama). Registra el
@@ -197,7 +186,6 @@ pub struct MoleculeAcquisitionStep {
     pub provider_name: String,
     pub parameters: HashMap<String, serde_json::Value>,
 }
-
 /// Step que permite adquirir moléculas desde múltiples proveedores y unificarlas
 /// en una sola familia (deduplicando por inchikey). Cada proveedor puede tener
 /// su propio set de parámetros. Se registra un ProviderReference por cada
@@ -209,7 +197,6 @@ pub struct MultiMoleculeAcquisitionStep {
     pub provider_names: Vec<String>,
     pub parameters_per_provider: HashMap<String, HashMap<String, serde_json::Value>>, // provider -> params
 }
-
 #[async_trait]
 impl WorkflowStep for MultiMoleculeAcquisitionStep {
     fn get_id(&self) -> Uuid { self.id }
@@ -274,33 +261,26 @@ impl WorkflowStep for MultiMoleculeAcquisitionStep {
                                 integrity_ok: None } })
     }
 }
-
 #[async_trait]
 impl WorkflowStep for MoleculeAcquisitionStep {
     fn get_id(&self) -> Uuid {
         self.id
     }
-
     fn get_name(&self) -> &str {
         &self.name
     }
-
     fn get_description(&self) -> &str {
         &self.description
     }
-
     fn get_required_input_types(&self) -> Vec<String> {
         Vec::new() // No requiere input
     }
-
     fn get_output_types(&self) -> Vec<String> {
         vec!["molecule_family".to_string()]
     }
-
     fn allows_branching(&self) -> bool {
         true
     }
-
     async fn execute(&self,
                      _input: StepInput,
                      molecule_providers: &HashMap<String, Box<dyn MoleculeProvider>>,
@@ -322,7 +302,6 @@ impl WorkflowStep for MoleculeAcquisitionStep {
             let _ = &pd.required;
             let _ = &pd.default_value;
         }
-
         let param_defs = provider.get_available_parameters();
         // 3. Validar / completar parámetros.
         let validated = validate_parameters(&self.parameters, &param_defs).map_err(|e| format!("Parameter validation failed: {e}"))?;
@@ -332,7 +311,6 @@ impl WorkflowStep for MoleculeAcquisitionStep {
     family.recompute_hash();
         // Nota: la persistencia real la hace el WorkflowManager post-ejecución; este
         // comentario aclara.
-
     Ok(StepOutput { families: vec![family],
                         results: HashMap::new(),
                         // 5. Construir snapshot de ejecución. (root_execution_id / parent se
@@ -359,7 +337,6 @@ impl WorkflowStep for MoleculeAcquisitionStep {
                                                             integrity_ok: None } })
     }
 }
-
 /// Step que calcula una propiedad específica para cada familia de entrada
 /// usando un proveedor de propiedades. Añade (o sobrescribe) la propiedad en
 /// cada familia con la información de proveedor y parámetros para trazabilidad.
@@ -371,7 +348,6 @@ pub struct PropertiesCalculationStep {
     pub property_name: String,
     pub parameters: HashMap<String, serde_json::Value>,
 }
-
 /// Step que permite calcular múltiples propiedades usando distintos providers
 /// en una sola ejecución. El parámetro `providers` es un array de objetos
 /// {provider, property, parameters(optional)}.
@@ -381,10 +357,8 @@ pub struct MultiPropertiesStep {
     pub description: String,
     pub specs: Vec<MultiPropSpec>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiPropSpec { pub provider: String, pub property: String, pub parameters: HashMap<String, Value> }
-
 #[async_trait]
 impl WorkflowStep for MultiPropertiesStep {
     fn get_id(&self) -> Uuid { self.id }
@@ -468,7 +442,6 @@ impl WorkflowStep for MultiPropertiesStep {
         })
     }
 }
-
 /// Step que agrega datos (estadísticas, métricas) a partir de múltiples
 /// familias usando un DataProvider. No modifica las familias; coloca el
 /// resultado JSON en StepOutput.results bajo una clave proporcionada.
@@ -480,7 +453,6 @@ pub struct DataAggregationStep {
     pub result_key: String,
     pub parameters: HashMap<String, serde_json::Value>,
 }
-
 #[async_trait]
 impl WorkflowStep for DataAggregationStep {
     fn get_id(&self) -> Uuid {
@@ -501,7 +473,6 @@ impl WorkflowStep for DataAggregationStep {
     fn allows_branching(&self) -> bool {
         true
     }
-
     async fn execute(&self,
                      input: StepInput,
                      _molecule_providers: &HashMap<String, Box<dyn MoleculeProvider>>,
@@ -538,7 +509,6 @@ impl WorkflowStep for DataAggregationStep {
                                                             integrity_ok: None } })
     }
 }
-
 /// Step de filtrado que crea nuevas familias derivadas en función de una
 /// propiedad numérica (ej: logp). Mantiene inmutabilidad al no mutar las
 /// familias de entrada sino clonar y asignar nuevo id.
@@ -550,7 +520,6 @@ pub struct FilterStep {
     pub min: Option<f64>,
     pub max: Option<f64>,
 }
-
 #[async_trait]
 impl WorkflowStep for FilterStep {
     fn get_id(&self) -> Uuid { self.id }
@@ -603,7 +572,6 @@ impl WorkflowStep for FilterStep {
         })
     }
 }
-
 pub fn build_input_snapshot(families: &[MoleculeFamily]) -> serde_json::Value {
     serde_json::json!(families.iter().map(|f| serde_json::json!({
         "id": f.id,
@@ -615,33 +583,26 @@ pub fn build_input_snapshot(families: &[MoleculeFamily]) -> serde_json::Value {
         "parameters": f.parameters,
     })).collect::<Vec<_>>())
 }
-
 #[async_trait]
 impl WorkflowStep for PropertiesCalculationStep {
     fn get_id(&self) -> Uuid {
         self.id
     }
-
     fn get_name(&self) -> &str {
         &self.name
     }
-
     fn get_description(&self) -> &str {
         &self.description
     }
-
     fn get_required_input_types(&self) -> Vec<String> {
         vec!["molecule_family".to_string()]
     }
-
     fn get_output_types(&self) -> Vec<String> {
         vec!["molecule_family".to_string()]
     }
-
     fn allows_branching(&self) -> bool {
         true
     }
-
     async fn execute(&self,
                      input: StepInput,
                      _molecule_providers: &HashMap<String, Box<dyn MoleculeProvider>>,
@@ -662,7 +623,6 @@ impl WorkflowStep for PropertiesCalculationStep {
             let _ = &pd.required;
             let _ = &pd.default_value;
         }
-
         let param_defs = provider.get_available_parameters();
         // 2. Validar / normalizar parámetros.
         let validated = validate_prop_parameters(&self.parameters, &param_defs).map_err(|e| format!("Parameter validation failed: {e}"))?;
@@ -687,7 +647,6 @@ impl WorkflowStep for PropertiesCalculationStep {
                                                     execution_id: Uuid::new_v4() },
                                 Some(self.id));
         }
-
     Ok(StepOutput { families: output_families,
                         results: HashMap::new(),
                         // 5. Snapshot de ejecución (enriquecido posteriormente por el Manager).
@@ -713,7 +672,6 @@ impl WorkflowStep for PropertiesCalculationStep {
                                                             integrity_ok: None } })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,13 +680,11 @@ mod tests {
     use crate::providers::molecule::implementations::test_provider::TestMoleculeProvider;
     use crate::providers::properties::implementations::test_provider::TestPropertiesProvider;
     use std::collections::HashMap;
-
     struct TestWorkflowStep {
         id: Uuid,
         name: String,
         description: String,
     }
-
     #[async_trait]
     impl WorkflowStep for TestWorkflowStep {
         fn get_id(&self) -> Uuid {
@@ -775,20 +731,17 @@ mod tests {
                                                                 integrity_ok: None } })
         }
     }
-
     #[test]
     fn test_workflow_step_methods() {
         let step = TestWorkflowStep { id: Uuid::new_v4(),
                                       name: "Test Step".to_string(),
                                       description: "Test Description".to_string() };
-
         assert_eq!(step.get_name(), "Test Step");
         assert_eq!(step.get_description(), "Test Description");
         assert_eq!(step.get_required_input_types(), vec!["test_input".to_string()]);
         assert_eq!(step.get_output_types(), vec!["test_output".to_string()]);
         assert!(step.allows_branching());
     }
-
     #[tokio::test]
     async fn test_molecule_acquisition_step_execute() {
         let mut mol_providers = HashMap::new();
@@ -814,7 +767,6 @@ mod tests {
         assert_eq!(prov_ref.provider_type, "molecule");
         assert_eq!(prov_ref.provider_name, "test_molecule");
     }
-
     #[tokio::test]
     async fn test_properties_calculation_step_execute() {
         // Setup provider
@@ -847,7 +799,6 @@ mod tests {
         assert_eq!(prov_ref.provider_type, "properties");
         assert_eq!(prov_ref.provider_name, "test_properties");
     }
-
     #[tokio::test]
     async fn test_filter_step() {
         // Build family with a property

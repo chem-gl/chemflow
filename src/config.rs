@@ -5,14 +5,12 @@
 //! migraciones.
 use once_cell::sync::Lazy;
 use std::env;
-
 /// Configuración global de la aplicación (extensible para más secciones:
 /// logging, etc.).
 pub struct AppConfig {
     /// Configuración específica de base de datos.
     pub database: DatabaseConfig,
 }
-
 /// Parámetros de conexión a la base de datos.
 pub struct DatabaseConfig {
     /// URL completa de conexión (postgres://...).
@@ -20,17 +18,14 @@ pub struct DatabaseConfig {
     /// Número mínimo de conexiones en el pool.
     pub min_connections: u32,
 }
-
 /// Instancia global perezosa de configuración, evaluada una sola vez.
 pub static CONFIG: Lazy<AppConfig> = Lazy::new(|| {
     let url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let min = env::var("DATABASE_MIN_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
     AppConfig { database: DatabaseConfig { url, min_connections: min } }
 });
-
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Executor;
-
 /// Crea un pool de conexiones PostgreSQL basado en la configuración cargada.
 /// Devuelve un `Result` que permite propagar errores de conexión.
 pub async fn create_pool() -> Result<sqlx::Pool<sqlx::Postgres>, sqlx::Error> {
@@ -46,7 +41,6 @@ pub async fn create_pool() -> Result<sqlx::Pool<sqlx::Postgres>, sqlx::Error> {
         Err(e) => Err(e),
     }
 }
-
 /// Ensures the target database exists by connecting to the 'postgres'
 /// maintenance DB and issuing CREATE DATABASE.
 async fn ensure_database_exists(full_url: &str) -> Result<(), sqlx::Error> {

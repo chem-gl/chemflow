@@ -13,7 +13,6 @@ use crate::workflow::step::{DataAggregationStep, MoleculeAcquisitionStep, Proper
 use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
-
 pub struct FlowSession<'a> {
     manager: &'a mut WorkflowManager,
     families: Vec<MoleculeFamily>,
@@ -21,7 +20,6 @@ pub struct FlowSession<'a> {
     last_step_ids: HashMap<&'static str, Uuid>,
     last_params_hash: HashMap<&'static str, String>,
 }
-
 impl<'a> FlowSession<'a> {
     pub fn new(manager: &'a mut WorkflowManager) -> Self {
         manager.start_new_flow();
@@ -31,7 +29,6 @@ impl<'a> FlowSession<'a> {
                last_step_ids: HashMap::new(),
                last_params_hash: HashMap::new() }
     }
-
     fn require(&self, required: &[&'static str]) -> Result<(), String> {
         for r in required {
             if !self.executed_order.contains(r) {
@@ -40,7 +37,6 @@ impl<'a> FlowSession<'a> {
         }
         Ok(())
     }
-
     fn maybe_branch(&mut self, logical: &'static str, params: &HashMap<String, Value>) {
         let hash = crate::database::repository::compute_sorted_hash(params);
         if let Some(prev_step_id) = self.last_params_hash.get(logical).filter(|prev_hash| *prev_hash != &hash).and_then(|_| self.last_step_ids.get(logical)) {
@@ -48,7 +44,6 @@ impl<'a> FlowSession<'a> {
         }
         self.last_params_hash.insert(logical, hash);
     }
-
     pub async fn step1_acquire(&mut self, count: u32) -> Result<Uuid, Box<dyn std::error::Error>> {
         // No prerequisitos
         let params = HashMap::from([("count".into(), Value::Number(count.into()))]);
@@ -64,7 +59,6 @@ impl<'a> FlowSession<'a> {
         self.last_step_ids.insert("step1", step.id);
         Ok(step.id)
     }
-
     pub async fn step2_logp(&mut self, method: &str) -> Result<Uuid, Box<dyn std::error::Error>> {
         self.require(&["step1"])?;
         let params = HashMap::from([("calculation_method".into(), Value::String(method.to_string()))]);
@@ -83,7 +77,6 @@ impl<'a> FlowSession<'a> {
         self.last_step_ids.insert("step2", step.id);
         Ok(step.id)
     }
-
     pub async fn step3_aggregate(&mut self) -> Result<Uuid, Box<dyn std::error::Error>> {
         self.require(&["step1", "step2"])?;
         let params: HashMap<String, Value> = HashMap::from([("data_provider".into(), Value::String("antiox_aggregate".into()))]);
@@ -101,7 +94,6 @@ impl<'a> FlowSession<'a> {
         self.last_step_ids.insert("step3", step.id);
         Ok(step.id)
     }
-
     pub fn current_families(&self) -> &Vec<MoleculeFamily> {
         &self.families
     }

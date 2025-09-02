@@ -12,7 +12,6 @@ mod migrations;
 mod molecule;
 mod providers;
 mod workflow;
-
 use crate::database::repository::WorkflowExecutionRepository;
 use crate::providers::data::trait_dataprovider::DataProvider;
 use crate::providers::molecule::implementations::test_provider::TestMoleculeProvider;
@@ -29,7 +28,6 @@ use config::{create_pool, CONFIG};
 use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (1) Cargar .env si existe
@@ -37,35 +35,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Warning: could not load .env file ({e}) - relying on existing environment");
     }
     println!("Hello, ChemFlow! Running migrations...");
-
     // (2) Migraciones
     if let Err(e) = migrations::run_migrations().await {
         eprintln!("Failed to run migrations: {e}");
         return Err(e);
     }
     println!("Migrations applied.");
-
     // (3) Probar conexión BD
     println!("Intentando conectar a la base de datos...");
     println!("URL: {}", CONFIG.database.url);
     let pool = create_pool().await?;
     let row: (i64,) = sqlx::query_as("SELECT $1").bind(1_i64).fetch_one(&pool).await?;
     println!("Conexión verificada, resultado test: {}", row.0);
-
     let repo = WorkflowExecutionRepository::with_pool(pool).await;
-
     // (4) Registrar proveedores base
     let mut molecule_providers = HashMap::new();
     molecule_providers.insert("test_molecule".to_string(), Box::new(TestMoleculeProvider::new()) as Box<dyn crate::providers::molecule::traitmolecule::MoleculeProvider>);
     // Construct external antioxidant seed provider (module) to avoid dead_code
     // warning
     let _ext_seed = ExtAntioxidantSeedProvider;
-
     let mut properties_providers = HashMap::new();
     properties_providers.insert("test_properties".to_string(), Box::new(TestPropertiesProvider::new()) as Box<dyn crate::providers::properties::trait_properties::PropertiesProvider>);
     // Construct external antioxidant activity provider
     let _ext_activity = ExtAntioxidantActivityPropertiesProvider;
-
     // Mock antioxidant-specific providers (molecule + properties + data)
     struct AntioxidantSeedProvider;
     #[async_trait::async_trait]
@@ -93,7 +85,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(fam)
         }
     }
-
     struct AntioxActivityPropertiesProvider;
     #[async_trait::async_trait]
     impl crate::providers::properties::trait_properties::PropertiesProvider for AntioxActivityPropertiesProvider {
@@ -125,7 +116,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(v)
         }
     }
-
     struct AntioxAggregateProvider;
     #[async_trait::async_trait]
     impl DataProvider for AntioxAggregateProvider {
@@ -157,32 +147,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                              ("n_values".into(), Value::Number((count as i64).into())),])))
         }
     }
-
     molecule_providers.insert("antiox_seed".into(), Box::new(AntioxidantSeedProvider) as Box<dyn crate::providers::molecule::traitmolecule::MoleculeProvider>);
     properties_providers.insert("antiox_activity".into(), Box::new(AntioxActivityPropertiesProvider) as Box<dyn crate::providers::properties::trait_properties::PropertiesProvider>);
     let mut data_providers: HashMap<String, Box<dyn DataProvider>> = HashMap::new();
     data_providers.insert("antiox_aggregate".into(), Box::new(AntioxAggregateProvider) as Box<dyn DataProvider>);
     // Construct external antioxidant aggregate provider
     let _ext_agg = ExtAntioxidantAggregateProvider;
-
     // (5) Crear manager e iniciar nuevo flujo
     let mut manager = WorkflowManager::new(repo, molecule_providers, properties_providers, data_providers);
     let _root_id = manager.start_new_flow();
-
     // (6) Definir steps de ejemplo
     let acquisition_step = MoleculeAcquisitionStep { id: Uuid::new_v4(),
                                                      name: "Acquire Test Molecules".to_string(),
                                                      description: "Acquires a set of test molecules".to_string(),
                                                      provider_name: "test_molecule".to_string(),
                                                      parameters: HashMap::from([("count".to_string(), Value::Number(5.into()))]) };
-
     let properties_step = PropertiesCalculationStep { id: Uuid::new_v4(),
                                                       name: "Calculate LogP".to_string(),
                                                       description: "Calculates LogP for all molecules".to_string(),
                                                       provider_name: "test_properties".to_string(),
                                                       property_name: "logp".to_string(),
                                                       parameters: HashMap::from([("calculation_method".to_string(), Value::String("test".to_string()))]) };
-
     // (7) Ejecutar step de adquisición
     let acquisition_output = manager.execute_step(&acquisition_step, Vec::new(), acquisition_step.parameters.clone()).await?;
     println!("Acquired {} molecules", acquisition_output.families[0].molecules.len());
@@ -192,15 +177,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         manager.repository().freeze_family(fam.id).await?;
         println!("Family {} frozen (hash now {:?})", fam.id, fam.family_hash);
     }
-
     // (8) Crear rama (branch) desde el step de adquisición
     let _branch_root = manager.create_branch(acquisition_step.id);
     // (9) Ejecutar step de cálculo de propiedades
     let properties_output = manager.execute_step(&properties_step, acquisition_output.families, properties_step.parameters.clone()).await?;
     println!("Calculated properties for {} molecules", properties_output.families[0].molecules.len());
-
     let _mock = crate::providers::molecule::implementations::mock_provider::MockMoleculeProvider::new("TestMock".to_string(), "0.1.0".to_string());
-
     // (10) Mini flujo antioxidante
     let antiox_seed_step = MoleculeAcquisitionStep { id: Uuid::new_v4(),
                                                      name: "Acquire Antiox Seeds".into(),
@@ -209,7 +191,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                      parameters: HashMap::new() };
     let antiox_acq = manager.execute_step(&antiox_seed_step, vec![], HashMap::new()).await?;
     println!("Antiox seeds: {}", antiox_acq.families[0].molecules.len());
-
     let antiox_prop_step = PropertiesCalculationStep { id: Uuid::new_v4(),
                                                        name: "Score Antiox Activity".into(),
                                                        description: "Calcula puntajes antioxidantes".into(),
@@ -220,7 +201,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(prop) = antiox_scored.families[0].get_property("radical_scavenging_score") {
         println!("Scores registrados: {}", prop.values.len());
     }
-
     // (11) Branching desde step de scoring
     let branch_root = manager.create_branch(antiox_prop_step.id);
     let _ = branch_root; // silence unused
@@ -231,11 +211,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                   property_name: "radical_scavenging_score".into(),
                                                   parameters: HashMap::new() };
     let _branch_out = manager.execute_step(&branch_step, antiox_scored.families.clone(), HashMap::new()).await?;
-
     // (12) Obtener ejecuciones por root para validar trazabilidad
     let executions = manager.repository().get_steps_by_root(manager.root_execution_id()).await;
     println!("Total step executions for root {}: {}", manager.root_execution_id(), executions.len());
-
     // (13) Ejercitar API del repositorio para diagnóstico / evitar código muerto
     if let Some(first) = executions.first() {
         // get_execution & get_step_execution
@@ -250,7 +228,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _maybe_last = manager.last_step_id();
     // Explicit call to new() to silence potential dead code if signature changes
     let _dummy_repo = crate::database::repository::WorkflowExecutionRepository::new(true);
-
     // (14) Uso en runtime de enums de parámetros (evitar dead_code)
     use crate::providers::data::trait_dataprovider::{DataParameterDefinition, DataParameterType};
     use crate::providers::molecule::traitmolecule::ParameterType as MolParamType;
@@ -277,7 +254,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         required: false,
                                         default_value: None };
     let _ = (&dpd.name, &dpd.description, &dpd.data_type, dpd.required, &dpd.default_value);
-
     println!("Workflow completed successfully!");
     // Use a simple inline DataProvider implementation to exercise trait
     struct InlineCountProv;
@@ -301,7 +277,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let dp = InlineCountProv;
     let _total = dp.calculate(&properties_output.families, &HashMap::new()).await?;
-
     println!("\n=== Ejecución step-by-step con referencias y branching manual + auto ===");
     manager.start_new_flow();
     let mut recorded_step_ids: Vec<Uuid> = Vec::new();
@@ -314,7 +289,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_a = manager.execute_step(&step_a, vec![], step_a.parameters.clone()).await?;
     recorded_step_ids.push(out_a.execution_info.step_id);
     println!("Step A complete -> step_id={} families={}", out_a.execution_info.step_id, out_a.families.len());
-
     // Step B: Calculate LogP (first variant)
     let step_b = PropertiesCalculationStep { id: Uuid::new_v4(),
                                              name: "B:LogP#1".into(),
@@ -328,7 +302,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              out_b.execution_info.step_id,
              out_b.families[0].get_property("logp").map(|p| p.values.len()).unwrap_or(0),
              out_b.execution_info.branch_from_step_id);
-
     // Step C: Calculate LogP (second variant) - triggers auto-branch due to changed
     // parameter hash
     let mut params_c = HashMap::new();
@@ -342,7 +315,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_c = manager.execute_step(&step_c, out_b.families.clone(), params_c).await?;
     recorded_step_ids.push(out_c.execution_info.step_id);
     println!("Step C complete -> auto-branch? branch_from={:?}", out_c.execution_info.branch_from_step_id);
-
     // Manual branch from step B (using recorded reference) and then run another
     // property calc with freeze
     let branch_origin_id = recorded_step_ids[1]; // step B
@@ -360,7 +332,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     recorded_step_ids.push(out_d.execution_info.step_id);
     println!("Step D (branch) complete -> branch_from={:?} frozen={} hash={:?}",
              out_d.execution_info.branch_from_step_id, out_d.families[0].frozen, out_d.families[0].family_hash);
-
     // Aggregation over the latest (branched) family using DataAggregationStep to
     // showcase multi-family stats (single here for demo)
     let agg_step = DataAggregationStep { id: Uuid::new_v4(),
@@ -374,7 +345,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agg_input_fams.extend(out_d.families.clone());
     let agg_out = manager.execute_step(&agg_step, agg_input_fams, HashMap::from([("data_provider".into(), Value::String("antiox_aggregate".into()))])).await?;
     println!("Aggregation step result keys: {:?}", agg_out.results.keys().collect::<Vec<_>>());
-
     // ---------------------------------------------------------------------
     // (16) Ejemplo de ejecución 'full run' (pipeline) en modo lote
     // ---------------------------------------------------------------------
@@ -397,7 +367,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                       provider_name: "antiox_aggregate".into(),
                                       result_key: "batch_stats".into(),
                                       parameters: HashMap::new() };
-
     // Simple helper inline to run sequentially
     async fn run_pipeline(manager: &mut WorkflowManager, steps: Vec<(&dyn crate::workflow::step::WorkflowStep, HashMap<String, Value>)>) -> Result<Vec<StepOutput>, Box<dyn std::error::Error>> {
         let mut outputs = Vec::new();
@@ -417,7 +386,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              pipeline_results.len(),
              pipeline_results.last().unwrap().families.len(),
              pipeline_results.last().unwrap().results.keys().collect::<Vec<_>>());
-
     println!("Ejemplos avanzados completados.");
     // (17) DSL estilo encadenado solicitado (step1 -> step2 -> step3, re-ejecutar
     // step2 provoca branch)
@@ -434,7 +402,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let s3 = session.step3_aggregate().await?;
     println!("DSL step3 aggregate id={s3}");
     println!("Familias resultantes en DSL: {}", session.current_families().len());
-
     // ---------------------------------------------------------------
     // (18) Referenciar structs y métodos para evitar dead_code warnings
     // ---------------------------------------------------------------

@@ -1,7 +1,6 @@
 use chemflow_rust::data::family::MoleculeFamily;
 use chemflow_rust::database::repository::WorkflowExecutionRepository;
 use uuid::Uuid;
-
 #[tokio::test]
 async fn test_freeze_family_noop_in_memory() {
     let repo = WorkflowExecutionRepository::new(true);

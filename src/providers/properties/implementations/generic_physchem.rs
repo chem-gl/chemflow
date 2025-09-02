@@ -2,24 +2,19 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use serde_json::Value;
 use chrono::Utc;
-
 use crate::{providers::properties::trait_properties::{PropertiesProvider, ParameterDefinition, ParameterType}, data::{family::MoleculeFamily, types::LogPData}};
-
 /// Generic physchem provider that can mock multiple property kinds
 pub struct GenericPhysChemProvider {
     name: String,
     version: String,
     supported: Vec<String>,
 }
-
 impl GenericPhysChemProvider { pub fn new() -> Self { Self { name: "generic_physchem".into(), version: "0.1.0".into(), supported: vec![
     "logp","logd","pka","logs","mw","psa","volume","homo_energy","lumo_energy","partial_charge","polarizability","rotor_count","mr","hydration_energy","ld50"
     ].into_iter().map(|s| s.to_string()).collect() } } }
-
 impl Default for GenericPhysChemProvider {
     fn default() -> Self { Self::new() }
 }
-
 #[async_trait]
 impl PropertiesProvider for GenericPhysChemProvider {
     fn get_name(&self) -> &str { &self.name }
@@ -37,6 +32,5 @@ impl PropertiesProvider for GenericPhysChemProvider {
         Ok(self.supported.iter().enumerate().map(|(i,_p)| LogPData { value: (i as f64 + 1.0)*scale, source: self.name.clone(), frozen: false, timestamp: Utc::now() }).collect())
     }
 }
-
 #[cfg(test)]
 mod tests { use super::*; use crate::data::family::MoleculeFamily; use tokio; #[tokio::test] async fn test_generic_provider() { let prov = GenericPhysChemProvider::new(); let fam = MoleculeFamily::new("f".into(), None); let vals = prov.calculate_properties(&fam, &HashMap::new()).await.unwrap(); assert!(!vals.is_empty()); }}

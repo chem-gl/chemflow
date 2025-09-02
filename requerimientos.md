@@ -16,8 +16,7 @@
 4. **Flexibilidad**: Los steps pueden recibir 0 o múltiples familias de moléculas
 5. **Extensibilidad**: Fácil añadir nuevos tipos de proveedores y steps
 6. **Configuración**: Soporte para diferentes entornos y configuraciones de proveedores
-
-Este diseño proporciona un sistema robusto y flexible para la ejecución de workflows moleculares con control de versiones y capacidad de ramificación.
+   Este diseño proporciona un sistema robusto y flexible para la ejecución de workflows moleculares con control de versiones y capacidad de ramificación.
 
 # Explicación Breve de Uso
 
@@ -55,8 +54,7 @@ chemFlow se utiliza para definir y ejecutar workflows computacionales en químic
 3. **Step 3**: Filtrar las moléculas con logP > 2.0.
    creando un nuevo conjunto de moléculas filtradas
 4. **Step 4**: Calcular la toxicidad para las moléculas filtradas
-
-Si el usuario decide cambiar el paso 2 para usar un método diferente de cálculo de logP, se crea una rama a partir del step 2 y se ejecuta el workflow con el nuevo método, manteniendo los resultados originales y generando una nueva línea de resultados.
+   Si el usuario decide cambiar el paso 2 para usar un método diferente de cálculo de logP, se crea una rama a partir del step 2 y se ejecuta el workflow con el nuevo método, manteniendo los resultados originales y generando una nueva línea de resultados.
 
 ## Beneficios
 
@@ -64,8 +62,7 @@ Si el usuario decide cambiar el paso 2 para usar un método diferente de cálcul
 - **Trazabilidad**: Se puede rastrear el origen de cada dato y los métodos utilizados.
 - **Flexibilidad**: Fácil modificación de parámetros y creación de ramas para experimentar.
 - **Extensibilidad**: Fácil añadir nuevos proveedores y tipos de steps.
-
-chemFlow es ideal para investigadores que necesitan realizar flujos de trabajo computacionales complejos con requisitos de reproducibilidad y control de versiones.
+  chemFlow es ideal para investigadores que necesitan realizar flujos de trabajo computacionales complejos con requisitos de reproducibilidad y control de versiones.
 
 ```mermaid
 graph TD
@@ -73,7 +70,6 @@ graph TD
     B --> C[Configurar Steps]
     C --> D[Seleccionar Proveedores]
     D --> E[Ejecutar Workflow]
-
     subgraph "Ejecución del Workflow"
         E --> F[Step 1: Adquisición Moléculas]
         F --> G[Guardar Familia + Parámetros]
@@ -82,23 +78,19 @@ graph TD
         I --> J[Step N: Análisis/Transformación]
         J --> K[Guardar Resultados]
     end
-
     K --> L{¿Satisfactorio?}
     L -- Sí --> M[Resultados Finales]
     L -- No --> N[Crear Rama]
     N --> O[Modificar Parámetros/Proveedores]
     O --> E
-
     F --> P[Proveedor Moléculas]
     H --> Q[Proveedor Propiedades]
     J --> R[Proveedor Análisis]
-
     subgraph "Persistencia"
         G --> S[Base de Datos]
         I --> S
         K --> S
     end
-
     S --> T[Historial Completo]
     S --> U[Trazabilidad]
     S --> V[Capacidad de Branching]
@@ -126,7 +118,6 @@ workflow.add_step(Box::new(MoleculeAcquisitionStep {
         ("count".to_string(), Value::Number(10.into())),
     ]),
 }));
-
 workflow.add_step(Box::new(PropertiesCalculationStep {
     name: "Calcular LogP".to_string(),
     provider: "test_properties_provider".to_string(),
@@ -146,7 +137,6 @@ molecule_providers.insert(
     "test_molecule_provider".to_string(),
     Box::new(TestMoleculeProvider::new()) as Box<dyn MoleculeProvider>
 );
-
 let mut properties_providers = HashMap::new();
 properties_providers.insert(
     "test_properties_provider".to_string(),
@@ -173,7 +163,6 @@ let branch_id = workflow_manager.create_branch(
         ("method".to_string(), Value::String("super_advanced".to_string())),
     ]),
 ).await?;
-
 // Ejecutar la rama
 let branch_result = workflow_manager.execute_branch(branch_id).await?;
 ```
@@ -202,8 +191,7 @@ Un investigador quiere:
 2. Calcular sus propiedades de logP y toxicidad
 3. Filtrar las moléculas con logP > 2.0
 4. Realizar un análisis de similitud molecular
-
-Si después decide usar un método diferente de cálculo de logP, puede crear una rama en el paso 2 y ejecutar solo esa parte del workflow con los nuevos parámetros, manteniendo los resultados originales intactos.
+   Si después decide usar un método diferente de cálculo de logP, puede crear una rama en el paso 2 y ejecutar solo esa parte del workflow con los nuevos parámetros, manteniendo los resultados originales intactos.
 
 ## Beneficios
 
@@ -211,31 +199,24 @@ Si después decide usar un método diferente de cálculo de logP, puede crear un
 - **Colaboración**: Múltiples investigadores pueden trabajar en ramas diferentes
 - **Auditoría**: Historial completo de todos los cálculos realizados
 - **Experimentación**: Fácil probar diferentes parámetros y métodos sin afectar los resultados originales
-
-chemFlow está diseñado específicamente para workflows computacionales en química y bioinformática, donde la reproducibilidad, trazabilidad y experimentación son cruciales.
-Sobre los pasos (Steps)
-los steps podran resivir de 0 a varias familias de moleculas
-cada familia de moleculas podra tener una o varias propiedades definidas
-y una lista de parametros extras cada step puede pedir lo necesario para procesar
-
-cada steps puede regresar ya sea las mismas familias de moleculas agregar valores a estas familias pero con trasavilidad
-ya que los valores podran venir de diferentes providers y hay que guardar que provaider se uso con que parametros
-
-cada step debera tener acceso a una lista de providers que se usara ya sea para generar familia de moleculas o sus datos
-al finalizaar cada step se congelara los parametros que se usaron para ese step y asi poder crear nuevas ejecuciones cambiando los parametros
-y asi crear ramas vifurcaciones en el flow
-
-cada step regresara ya sea objetos de resultados(generados con provaiders); o familias con propiedades() y guardara la ejecucion los parametros para la ejecucion de los priver para la trazabilidad y confiansa asi para saber si se debe vifurcar al cambiar algun parametro
-
-Sobre los providers de familias Se definira como trait para que puedan aver varios
-cada provaider podra generar una familia de moleculas ya sea que pida parametros para hacerlo o no
-
-sobre los providers propiedades
-estos son provedores que pueden definir propiedades para toda una familia de moleculas este siempre guardara todos los parametros con los que
-se ejecuta el provaider y la salida completa del programa o funcion que se ejecuta y generara la familia de moleculas con sus datos
-agregados y lo regresara
-sobre provaiders de datos este solo regresara un dato que se guardara como parametros puede recibir ya sea una familia o un solo dato normalmente
-servira para promedios y demas cosas pero que se guardaran para trazabilidad pero tambien esto se podra obtener de diferentes fuentes
-
-Sobre moleculas
-estas solo tienen su inchi smile y inchi key como llave maestra son parte de la familia y hay propiedades que hacen referencia a estas si bien cada propidedad debe saber que provider la trajo deben de estar guardada en un lugar separado de los steps ya que estos no deben depender de los steps por si se quieren obtener propiedades de las moleculas ver por ejemplo todos los logP que tienen de que provaider fue obtenido y con que datos
+  chemFlow está diseñado específicamente para workflows computacionales en química y bioinformática, donde la reproducibilidad, trazabilidad y experimentación son cruciales.
+  Sobre los pasos (Steps)
+  los steps podran resivir de 0 a varias familias de moleculas
+  cada familia de moleculas podra tener una o varias propiedades definidas
+  y una lista de parametros extras cada step puede pedir lo necesario para procesar
+  cada steps puede regresar ya sea las mismas familias de moleculas agregar valores a estas familias pero con trasavilidad
+  ya que los valores podran venir de diferentes providers y hay que guardar que provaider se uso con que parametros
+  cada step debera tener acceso a una lista de providers que se usara ya sea para generar familia de moleculas o sus datos
+  al finalizaar cada step se congelara los parametros que se usaron para ese step y asi poder crear nuevas ejecuciones cambiando los parametros
+  y asi crear ramas vifurcaciones en el flow
+  cada step regresara ya sea objetos de resultados(generados con provaiders); o familias con propiedades() y guardara la ejecucion los parametros para la ejecucion de los priver para la trazabilidad y confiansa asi para saber si se debe vifurcar al cambiar algun parametro
+  Sobre los providers de familias Se definira como trait para que puedan aver varios
+  cada provaider podra generar una familia de moleculas ya sea que pida parametros para hacerlo o no
+  sobre los providers propiedades
+  estos son provedores que pueden definir propiedades para toda una familia de moleculas este siempre guardara todos los parametros con los que
+  se ejecuta el provaider y la salida completa del programa o funcion que se ejecuta y generara la familia de moleculas con sus datos
+  agregados y lo regresara
+  sobre provaiders de datos este solo regresara un dato que se guardara como parametros puede recibir ya sea una familia o un solo dato normalmente
+  servira para promedios y demas cosas pero que se guardaran para trazabilidad pero tambien esto se podra obtener de diferentes fuentes
+  Sobre moleculas
+  estas solo tienen su inchi smile y inchi key como llave maestra son parte de la familia y hay propiedades que hacen referencia a estas si bien cada propidedad debe saber que provider la trajo deben de estar guardada en un lugar separado de los steps ya que estos no deben depender de los steps por si se quieren obtener propiedades de las moleculas ver por ejemplo todos los logP que tienen de que provaider fue obtenido y con que datos

@@ -2,14 +2,11 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::HashMap;
-
 use crate::data::family::MoleculeFamily;
 use crate::data::types::LogPData;
 use crate::providers::properties::trait_properties::{ParameterDefinition, ParameterType, PropertiesProvider};
-
 /// Mock provider generating antioxidant activity scores per molecule.
 pub struct AntioxidantActivityPropertiesProvider;
-
 #[async_trait]
 impl PropertiesProvider for AntioxidantActivityPropertiesProvider {
     fn get_name(&self) -> &str {
@@ -51,7 +48,6 @@ impl PropertiesProvider for AntioxidantActivityPropertiesProvider {
                  .collect())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,10 +6,8 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-
 use crate::data::family::MoleculeFamily;
 use crate::data::types::LogPData;
-
 #[async_trait]
 pub trait PropertiesProvider: Send + Sync {
     fn get_name(&self) -> &str;
@@ -17,17 +15,13 @@ pub trait PropertiesProvider: Send + Sync {
     fn get_description(&self) -> &str;
     fn get_supported_properties(&self) -> Vec<String>;
     fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition>;
-
     async fn calculate_properties(&self, molecule_family: &MoleculeFamily, parameters: &HashMap<String, Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>>;
 }
 #[cfg(test)]
 mod more_properties_provider_tests {
     use chrono::Utc;
-
     use super::*;
-
     struct AdvancedProvider;
-
     #[async_trait]
     impl PropertiesProvider for AdvancedProvider {
         fn get_name(&self) -> &str {
@@ -70,7 +64,6 @@ mod more_properties_provider_tests {
                                timestamp: Utc::now() },])
         }
     }
-
     #[test]
     fn test_advanced_provider_metadata() {
         let provider = AdvancedProvider;
@@ -81,7 +74,6 @@ mod more_properties_provider_tests {
         assert!(props.contains(&"logp".to_string()));
         assert!(props.contains(&"solubility".to_string()));
     }
-
     #[test]
     fn test_advanced_provider_parameters() {
         let provider = AdvancedProvider;
@@ -101,7 +93,6 @@ mod more_properties_provider_tests {
         assert!(!method_param.required);
         assert_eq!(method_param.default_value, Some(Value::String("default".to_string())));
     }
-
     #[tokio::test]
     async fn test_advanced_provider_calculate_properties() {
         let provider = AdvancedProvider;
@@ -124,7 +115,6 @@ pub struct ParameterDefinition {
     pub required: bool,
     pub default_value: Option<Value>,
 }
-
 #[derive(Debug, Clone)]
 pub enum ParameterType {
     String,
@@ -133,7 +123,6 @@ pub enum ParameterType {
     Array,
     Object,
 }
-
 fn _use_properties_params() {
     let pd = ParameterDefinition { name: String::new(),
                                    description: String::new(),
@@ -151,34 +140,27 @@ fn _use_properties_params() {
     let _ = ParameterType::Array;
     let _ = ParameterType::Object;
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::types::LogPData;
     use async_trait::async_trait;
     use chrono::Utc;
-
     struct TestPropertiesProvider;
-
     #[async_trait]
     impl PropertiesProvider for TestPropertiesProvider {
         fn get_name(&self) -> &str {
             "Test Properties Provider"
         }
-
         fn get_version(&self) -> &str {
             "1.0.0"
         }
-
         fn get_description(&self) -> &str {
             "Test properties provider"
         }
-
         fn get_supported_properties(&self) -> Vec<String> {
             vec!["logp".to_string()]
         }
-
         fn get_available_parameters(&self) -> HashMap<String, ParameterDefinition> {
             let mut params = HashMap::new();
             params.insert("param1".to_string(),
@@ -189,7 +171,6 @@ mod tests {
                                                 default_value: Some(Value::Number(serde_json::Number::from_f64(1.0).unwrap())) });
             params
         }
-
         async fn calculate_properties(&self, _molecule_family: &MoleculeFamily, _parameters: &HashMap<String, Value>) -> Result<Vec<LogPData>, Box<dyn std::error::Error>> {
             Ok(vec![LogPData { value: 2.0,
                                source: "test".to_string(),
@@ -197,21 +178,17 @@ mod tests {
                                timestamp: Utc::now() }])
         }
     }
-
     #[test]
     fn test_properties_provider_methods() {
         let provider = TestPropertiesProvider;
-
         // Call all methods
         assert_eq!(provider.get_name(), "Test Properties Provider");
         assert_eq!(provider.get_version(), "1.0.0");
         assert_eq!(provider.get_description(), "Test properties provider");
         assert_eq!(provider.get_supported_properties(), vec!["logp".to_string()]);
-
         let params = provider.get_available_parameters();
         assert!(params.contains_key("param1"));
     }
-
     #[test]
     fn test_parameter_definition_fields() {
         let param_def = ParameterDefinition { name: "test_param".to_string(),
@@ -219,7 +196,6 @@ mod tests {
                                               data_type: ParameterType::Boolean,
                                               required: true,
                                               default_value: Some(Value::Array(vec![])) };
-
         // Access all fields
         assert_eq!(param_def.name, "test_param");
         assert_eq!(param_def.description, "Test description");
@@ -227,7 +203,6 @@ mod tests {
         assert!(param_def.required);
         assert!(param_def.default_value.is_some());
     }
-
     #[test]
     fn test_parameter_type_variants() {
         // Use all variants
@@ -238,16 +213,13 @@ mod tests {
         let _object_type = ParameterType::Object;
     }
 }
-
 #[cfg(test)]
 mod trait_properties_usage_tests {
     use super::*;
     use crate::data::types::LogPData;
     use async_trait::async_trait;
     use std::collections::HashMap;
-
     struct DummyProvider;
-
     #[async_trait]
     impl PropertiesProvider for DummyProvider {
         fn get_name(&self) -> &str {
@@ -269,7 +241,6 @@ mod trait_properties_usage_tests {
             Ok(vec![])
         }
     }
-
     #[tokio::test]
     async fn test_dummy_provider_methods() {
         let prov = DummyProvider;

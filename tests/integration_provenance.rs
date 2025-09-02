@@ -9,12 +9,10 @@ use chemflow_rust::workflow::step::{StepExecutionInfo, StepInput, StepOutput, St
 use chrono::Utc;
 use std::collections::HashMap;
 use uuid::Uuid;
-
 struct PropStep {
     id: Uuid,
     name: &'static str,
 }
-
 #[async_trait]
 impl WorkflowStep for PropStep {
     fn get_id(&self) -> Uuid {
@@ -71,32 +69,27 @@ impl WorkflowStep for PropStep {
                                 integrity_ok: None } })
     }
 }
-
 #[tokio::test]
 async fn test_multi_provider_and_autobranch() {
     // In-memory repo (not exercising DB writes here to keep test light)
     let repo = WorkflowExecutionRepository::new(true);
     let mut manager = WorkflowManager::new(repo, HashMap::new(), HashMap::new(), HashMap::new());
-
     // Create base family
     let mut fam = MoleculeFamily::new("F1".into(), None);
     fam.recompute_hash();
     let families = vec![fam];
-
     // First step with parameter X=1
     let s1 = PropStep { id: Uuid::new_v4(), name: "P1" };
     let mut params1 = HashMap::new();
     params1.insert("X".into(), serde_json::json!(1));
     let out1 = manager.execute_step(&s1, families.clone(), params1).await.unwrap();
     assert_eq!(out1.families[0].get_property("logp").unwrap().providers.len(), 1);
-
     // Second step same params -> should not branch
     let s2 = PropStep { id: Uuid::new_v4(), name: "P2" };
     let mut params2 = HashMap::new();
     params2.insert("X".into(), serde_json::json!(1));
     let out2 = manager.execute_step(&s2, out1.families.clone(), params2).await.unwrap();
     assert!(out2.execution_info.branch_from_step_id.is_none(), "No branch expected");
-
     // Third step changed params -> causes branch
     let s3 = PropStep { id: Uuid::new_v4(), name: "P3" };
     let mut params3 = HashMap::new();
