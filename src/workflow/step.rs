@@ -288,9 +288,11 @@ mod tests {
     }
 
    
+    #[test]
+    fn test_workflow_step_methods() {
+    
     #[tokio::test]
     async fn test_molecule_acquisition_step_execute() {
-        // Setup provider
         let mut mol_providers = HashMap::new();
         mol_providers.insert(
             "test_molecule".to_string(),
@@ -361,9 +363,6 @@ mod tests {
         assert_eq!(prov_ref.provider_type, "properties");
         assert_eq!(prov_ref.provider_name, "test_properties");
     }
-
-    #[test]
-    fn test_workflow_step_methods() {
         let step = TestWorkflowStep {
             id: Uuid::new_v4(),
             name: "Test Step".to_string(),

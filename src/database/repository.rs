@@ -1,45 +1,76 @@
 use std::collections::HashMap;
 use uuid::Uuid;
+use crate::workflow::step::{StepExecutionInfo, StepStatus};
 
-use crate::workflow::step::StepExecutionInfo;
-
+#[derive(Clone)]
 pub struct WorkflowExecutionRepository {
-    executions: HashMap<Uuid, Vec<StepExecutionInfo>>,
+    in_memory: std::sync::Arc<tokio::sync::RwLock<HashMap<Uuid, Vec<StepExecutionInfo>>>>,
+    pool: Option<sqlx::Pool<sqlx::Postgres>>,
 }
 
 impl WorkflowExecutionRepository {
-    pub fn new() -> Self {
+    pub fn new(in_memory_only: bool) -> Self {
         Self {
-            executions: HashMap::new(),
+            in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pool: if in_memory_only { None } else { None },
         }
     }
 
-    pub async fn save_step_execution(&mut self, execution: &StepExecutionInfo) -> Result<(), Box<dyn std::error::Error>> {
-        let execution_id = execution.step_id;
-    self.executions.entry(execution_id).or_default().push(execution.clone());
+    pub async fn with_pool(pool: sqlx::Pool<sqlx::Postgres>) -> Self {
+        Self {
+            in_memory: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pool: Some(pool),
+        }
+    }
+
+    pub async fn save_step_execution(&self, execution: &StepExecutionInfo) -> Result<(), Box<dyn std::error::Error>> {
+        // Always store in-memory for quick retrieval
+        {
+            let mut guard = self.in_memory.write().await;
+            guard.entry(execution.step_id).or_default().push(execution.clone());
+        }
+        if let Some(pool) = &self.pool {
+            sqlx::query(
+                "INSERT INTO workflow_step_executions (step_id, name, description, status, parameters, providers_used, start_time, end_time)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                 ON CONFLICT (step_id) DO UPDATE SET status = EXCLUDED.status, end_time = EXCLUDED.end_time, parameters = EXCLUDED.parameters, providers_used = EXCLUDED.providers_used"
+            )
+            .bind(execution.step_id)
+            .bind("step") // placeholder name (extend model to include name/description later)
+            .bind("")
+            .bind(match &execution.status { StepStatus::Pending => "Pending", StepStatus::Running => "Running", StepStatus::Completed => "Completed", StepStatus::Failed(_) => "Failed" })
+            .bind(serde_json::to_value(&execution.parameters)?)
+            .bind(serde_json::to_value(&execution.providers_used)?)
+            .bind(execution.start_time)
+            .bind(execution.end_time)
+            .execute(pool)
+            .await?;
+        }
         Ok(())
     }
 
     pub async fn get_execution(&self, execution_id: Uuid) -> Result<Vec<StepExecutionInfo>, Box<dyn std::error::Error>> {
-    Ok(self.executions.get(&execution_id).cloned().unwrap_or_default())
+        // Prefer in-memory
+        let guard = self.in_memory.read().await;
+        Ok(guard.get(&execution_id).cloned().unwrap_or_default())
     }
 
     pub async fn get_step_execution(&self, execution_id: Uuid, step_index: usize) -> Result<StepExecutionInfo, Box<dyn std::error::Error>> {
-        let execution = self.get_execution(execution_id).await?;
-        execution.get(step_index).cloned().ok_or("Step not found".into())
+        let all = self.get_execution(execution_id).await?;
+        all.get(step_index).cloned().ok_or("Step not found".into())
     }
 
-    pub async fn save_step_execution_for_branch(&mut self, execution: &StepExecutionInfo, branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
-    self.executions.entry(branch_id).or_default().push(execution.clone());
-        Ok(())
+    pub async fn save_step_execution_for_branch(&self, execution: &StepExecutionInfo, branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
+        let mut cloned = execution.clone();
+        cloned.step_id = branch_id; // treat branch as separate id for now
+        self.save_step_execution(&cloned).await
     }
 
-    // Placeholder for branching
     pub async fn get_step(&self, _step_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         Err("Not implemented".into())
     }
 
-    pub async fn save_step_for_branch(&mut self, _step: &(), _branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn save_step_for_branch(&self, _step: &(), _branch_id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }
 }
@@ -53,7 +84,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_repository_methods() {
-        let mut repo = WorkflowExecutionRepository::new();
+    let repo = WorkflowExecutionRepository::new(true);
         
         let execution_info = StepExecutionInfo {
             step_id: Uuid::new_v4(),
@@ -99,7 +130,7 @@ mod repository_usage_tests {
 
     #[tokio::test]
     async fn test_repo_all_methods() {
-        let mut repo = WorkflowExecutionRepository::new();
+    let repo = WorkflowExecutionRepository::new(true);
         let info = StepExecutionInfo { step_id: Uuid::new_v4(), parameters: HashMap::new(), providers_used: Vec::new(), start_time: Utc::now(), end_time: Utc::now(), status: StepStatus::Pending };
         repo.save_step_execution(&info).await.unwrap();
         let all = repo.get_execution(info.step_id).await.unwrap();
@@ -123,7 +154,7 @@ async fn _use_repository_methods() {
     use std::collections::HashMap;
     use uuid::Uuid;
 
-    let mut repo = WorkflowExecutionRepository::new();
+    let repo = WorkflowExecutionRepository::new(true);
     let id = Uuid::new_v4();
     let info = StepExecutionInfo {
         step_id: id,

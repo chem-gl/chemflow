@@ -3,9 +3,12 @@ mod molecule;
 mod workflow;
 mod providers;
 mod database;
+mod migrations;
+mod config;
 
 use std::collections::HashMap;
 use crate::database::repository::WorkflowExecutionRepository;
+use config::{CONFIG, create_pool};
 use crate::providers::molecule::implementations::test_provider::TestMoleculeProvider;
 use crate::providers::properties::implementations::test_provider::TestPropertiesProvider;
 use crate::workflow::manager::WorkflowManager;
@@ -15,10 +18,29 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Hello, ChemFlow!");
+    // Load .env if present
+    if let Err(e) = dotenvy::dotenv() {
+        eprintln!("Warning: could not load .env file ({e}) - relying on existing environment");
+    }
+    println!("Hello, ChemFlow! Running migrations...");
 
-    // Create repository
-    let repo = WorkflowExecutionRepository::new();
+    if let Err(e) = migrations::run_migrations().await {
+        eprintln!("Failed to run migrations: {e}");
+        return Err(e);
+    }
+    println!("Migrations applied.");
+
+    // Test DB connection
+    println!("Intentando conectar a la base de datos...");
+    println!("URL: {}", CONFIG.database.url);
+    let pool = create_pool().await?;
+    let row: (i64,) = sqlx::query_as("SELECT $1")
+        .bind(1_i64)
+        .fetch_one(&pool)
+        .await?;
+    println!("Conexión verificada, resultado test: {}", row.0);
+
+    let repo = WorkflowExecutionRepository::with_pool(pool).await;
 
     // Create providers
     let mut molecule_providers = HashMap::new();

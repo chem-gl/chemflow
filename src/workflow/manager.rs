@@ -54,33 +54,7 @@ impl WorkflowManager {
         Ok(output)
     }
     
-    // pub async fn create_branch(
-    //     &self,
-    //     original_execution_id: Uuid,
-    //     step_index: usize,
-    //     new_parameters: HashMap<String, serde_json::Value>,
-    // ) -> Result<Uuid, Box<dyn std::error::Error>> {
-    //     // Obtener la ejecución original
-    //     let original_execution = self.execution_repo.get_execution(original_execution_id).await?;
-        
-    //     // Crear una nueva rama
-    //     let branch_id = Uuid::new_v4();
-        
-    //     // Copiar todos los steps hasta el punto de bifurcación
-    //     for i in 0..step_index {
-    //         let step_execution = self.execution_repo.get_step_execution(original_execution_id, i).await?;
-    //         self.execution_repo.save_step_execution_for_branch(&step_execution, branch_id).await?;
-    //     }
-        
-    //     // Crear un nuevo step con los nuevos parámetros
-    //     let step = self.execution_repo.get_step(original_execution.steps[step_index]).await?;
-    //     let mut branched_step = step.clone();
-    //     branched_step.parameters = new_parameters;
-        
-    //     // Guardar el step bifurcado
-    //     self.execution_repo.save_step_for_branch(&branched_step, branch_id).await?;
-    //    
-} // end impl WorkflowManager
+  }
 
 #[cfg(test)]
 mod tests {
@@ -126,7 +100,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_step_manager() {
-        let repo = WorkflowExecutionRepository::new();
+        let repo = WorkflowExecutionRepository::new(true);
         let mol = HashMap::new();
         let props = HashMap::new();
         let mut manager = WorkflowManager::new(repo, mol, props);
