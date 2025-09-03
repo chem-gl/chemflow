@@ -599,9 +599,9 @@ flowchart LR
     end
     subgraph Propiedades
         C[Compute Properties]
-        D[Select Preferred Policy]
+        D[Select Preferred (Policy)]
     end
-    subgraph Agregación
+    subgraph Agregacion
         E[Aggregate Metrics]
     end
     subgraph Decisiones
@@ -1328,6 +1328,7 @@ impl StepDefinition for NormalizePropertiesStep {
 | Creación artifact     | ArtifactCreated emitido                    | run                 |
 | Metadata mínima       | source_step + schema_version               | run (Artifact::new) |
 | Campos adicionales    | derived_cutoff, normalized_count           | run                 |
+| Documentación         | Invariante y uso de props                  | README.md           |
 
 ### 15.6 Relación con Diagramas
 
@@ -1380,7 +1381,7 @@ flowchart LR
         C[Compute Properties]
         D[Select Preferred (Policy)]
     end
-    subgraph Agregación
+    subgraph Agregacion
         E[Aggregate Metrics]
     end
     subgraph Decisiones
@@ -1993,14 +1994,8 @@ GATE_F6:
 ### F7 – Retry Manual Mínimo
 
 | Núcleo | Contrato Estabilizado | GATE_F7 | Paralelo Seguro |
-| -----------------------------------Script check_deps.sh (usa cargo metadata) y falla en ciclos.
-Pipeline CI: cargo fmt --check, cargo clippy --all-Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+| ----------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
 Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
-Módulo hashing::canonical_json único (no duplicar lógica).
-Crear CoreError / DomainError con thiserror.
-Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
-Esqueleto README.md + CONTRIBUTING.md.
-Primera build limpia confirmando baseline.targets --all-features, cargo test.
 Módulo hashing::canonical_json único (no duplicar lógica).
 Crear CoreError / DomainError con thiserror.
 Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
@@ -2011,7 +2006,13 @@ Módulo hashing::canonical_json único (no duplicar lógica).
 Crear CoreError / DomainError con thiserror.
 Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
 Esqueleto README.md + CONTRIBUTING.md.
-Primera build limpia confirmando baseline.
+Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
+Módulo hashing::canonical_json único (no duplicar lógica).
+Crear CoreError / DomainError con thiserror.
+Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+Esqueleto README.md + CONTRIBUTING.md.
+Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |
 | RetryPolicy (should_retry), transición Failed→Pending, retry_count memoria, evento RetryScheduled opcional | Semántica retry (no altera fingerprint) | Backoff diseño inicial | Borrador estrategia exponencial |
 
 Objetivos Clave:
@@ -2021,20 +2022,8 @@ Objetivos Clave:
 
 Pasos sugeridos:
 
-1. Campo `retry_count` en StepSlot.Script check_deps.sh (usa cargo metadata) y falla en ciclos.
-   Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
-   Módulo hashing::canonical_json único (no duplicar lógica).
-   Crear CoreError / DomainError con thiserror.
-   Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
-   Esqueleto README.md + CONTRIBUTING.md.
-   Primera build limpia confirmando baseline.
-2. `FlScript check_deps.sh (usa cargo metadata) y falla en ciclos.
-Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
-Módulo hashing::canonical_json único (no duplicar lógica).
-Crear CoreError / DomainError con thiserror.
-Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
-Esqueleto README.md + CONTRIBUTING.md.
-Primera build limpia confirmando baseline.owEngine::retry(step_id)`.
+1. Campo `retry_count` en StepSlot.
+2. `FlowEngine::retry(step_id)`.
 3. Evento RetryScheduled (si < max).
 4. Test: exceder max rechaza.
 5. Nuevos artifacts generan nuevos IDs (no colisión hash).
@@ -2178,8 +2167,7 @@ Pasos sugeridos:
 3. Test hash agregados equivalentes.
 4. Ejemplo consulta optimizada.
 5. Verificar rollback consistente.
-6. Benchmark latencia antes/después.
-7. Documentar naming agregados.
+6. Documentar naming agregados.
 
 GATE_F12:
 
