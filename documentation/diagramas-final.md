@@ -79,68 +79,70 @@ Visión unificada: Dominio Químico ↔ Adaptación ↔ Core ↔ Persistencia �
 
 ```mermaid
 classDiagram
-	%% Dominio
-	class Molecule {+inchikey: String +smiles: String}
-	class MoleculeFamily {+id: UUID +ordered_keys: Vec +family_hash: String}
-	class MolecularProperty {+id: UUID +name: String +value: Json +units?}
-	class FamilyAggregate {+id: UUID +aggregate_name: String +aggregate_value: Json}
-	class FamilyPropertyProjection
+    %% Dominio
+    class Molecule {+inchikey: String +smiles: String +metadata: Json}
+    class MoleculeFamily {+id: UUID +ordered_keys: Vec<inchikey> +family_hash: String +frozen: bool}
+    class MolecularProperty {+id: UUID +molecule: inchikey +name: String +value: Json +units? +preferred: bool}
+    class FamilyAggregate {+id: UUID +family_id: UUID +aggregate_name: String +aggregate_value: Json}
+    class FamilyPropertyProjection {<<computed>> +family_id +property_name +values[] +preferred}
 
-	%% Adaptación
-	class DomainStepAdapter {+to_artifacts(domain_objs): Vec~Artifact~}
-	class ChemArtifactEncoder {+encode(kind, data): Artifact}
+    %% Adaptación
+    class DomainStepAdapter {+to_artifacts(domain_objs): Vec~Artifact~ +collect_inputs(): Vec~Artifact~}
+    class ChemArtifactEncoder {+encode(kind, data): Artifact +decode(artifact): DomainObj}
 
-	%% Core
-	class FlowEngine {+next(flow_id) +branch(..) +recover(..)}
-	class FlowDefinition {+steps: Vec~StepDefinition~}
-	class FlowInstance {+id: UUID +cursor: usize +branch_id?}
-	class StepSlot {+status +fingerprint +outputs[]}
-	class StepDefinition
-	class ExecutionContext {+inputs[] +params +event_sink}
-	class ParamInjector
-	class CompositeInjector {+delegates[]}
-	class PolicyEngine {+decide_branch() +decide_retry()}
-	class EventStore {+append() +list(flow_id)}
-	class Artifact {+id: UUID +kind: ArtifactKind +hash: String}
-	class ArtifactKind
-	class PropertySelectionPolicy
-	class RetryPolicy
+    %% Core
+    class FlowEngine {+next(flow_id) +branch(from_step) +recover(flow_id) +resume_user_input(params)}
+    class FlowDefinition {+steps: Vec~StepDefinition~ +id: UUID}
+    class FlowInstance {+id: UUID +cursor: usize +branch_id: UUID +status: FlowStatus}
+    class StepSlot {+defn: StepDefinition +status: StepStatus +fingerprint: String +outputs: Vec~Artifact~}
+    class StepDefinition {<<interface>> +id() +name() +kind() +required_input_kinds() +base_params() +validate_params() +run() +fingerprint() +rehydrate() +clone_for_branch()}
+    class ExecutionContext {+inputs: Vec~Artifact~ +params: Json +event_sink: EventSink}
+    class ParamInjector {<<interface>> +inject(flow, step): Json}
+    class CompositeInjector {+delegates: Vec~ParamInjector~ +inject()}
+    class PolicyEngine {+decide_branch(criteria) +decide_retry(error) +decide_skip(step)}
+    class EventStore {<<interface>> +append(event) +list(flow_id) +replay(flow_id)}
+    class Artifact {+id: UUID +kind: ArtifactKind +hash: String +payload: Json +metadata: Json}
+    class ArtifactKind {<<enum>> Molecule, Family, Property, Aggregate}
+    class PropertySelectionPolicy {+select(properties): preferred}
+    class RetryPolicy {+should_retry(error, attempt): bool}
 
-	%% Persistencia / Auditoría
-	class PROPERTY_PROVENANCE
-	class WORKFLOW_BRANCHES
-	class STEP_EXECUTION_ERRORS
-	class EVENT_LOG
+    %% Persistencia / Auditoría
+    class PROPERTY_PROVENANCE {+property_id +provider +version +step_id}
+    class WORKFLOW_BRANCHES {+branch_id +root_flow_id +parent_flow_id +divergence_params_hash}
+    class STEP_EXECUTION_ERRORS {+step_id +attempt_number +error_class +transient +details}
+    class EVENT_LOG {+seq: BIGSERIAL +flow_id +event_type +payload +ts}
 
-	%% Integraciones
-	class UIClient {+render(flow)}
-	class HPCDispatcher {+submit(job)}
+    %% Integraciones
+    class UIClient {+render(flow) +await_user_input(step)}
+    class HPCDispatcher {+submit(job) +monitor(status)}
 
-	MoleculeFamily --> Molecule : contiene
-	MolecularProperty --> Molecule : describe
-	FamilyAggregate --> MoleculeFamily : deriva
-	DomainStepAdapter --> ChemArtifactEncoder
-	DomainStepAdapter ..> MolecularProperty
-	DomainStepAdapter ..> FamilyAggregate
-	ChemArtifactEncoder ..> Artifact
-	FlowEngine --> FlowDefinition
-	FlowEngine --> FlowInstance
-	FlowInstance --> StepSlot
-	StepSlot --> StepDefinition
-	StepSlot --> Artifact
-	CompositeInjector ..|> ParamInjector
-	FlowEngine --> ParamInjector
-	FlowEngine --> EventStore
-	FlowEngine --> PolicyEngine
-	StepDefinition --> ExecutionContext
-	StepDefinition --> Artifact
-	PropertySelectionPolicy ..> StepDefinition
-	RetryPolicy ..> FlowEngine
-	EVENT_LOG ..> FlowInstance : reconstrucción
-	WORKFLOW_BRANCHES ..> FlowInstance : branch metadata
-	STEP_EXECUTION_ERRORS ..> FlowInstance : errores
-	UIClient ..> EventStore
-	HPCDispatcher ..> FlowEngine
+    %% Relaciones
+    MoleculeFamily --> Molecule : contiene orden
+    MolecularProperty --> Molecule : describe
+    FamilyAggregate --> MoleculeFamily : deriva
+    FamilyPropertyProjection --> MoleculeFamily : agrupa
+    DomainStepAdapter --> ChemArtifactEncoder : usa
+    DomainStepAdapter ..> MolecularProperty : adapta
+    DomainStepAdapter ..> FamilyAggregate : adapta
+    ChemArtifactEncoder --> Artifact : produce
+    FlowEngine --> FlowDefinition : orquesta
+    FlowEngine --> FlowInstance : gestiona
+    FlowInstance --> StepSlot : contiene
+    StepSlot --> StepDefinition : instancia
+    StepSlot --> Artifact : produce
+    CompositeInjector ..|> ParamInjector
+    FlowEngine --> ParamInjector : inyecta
+    FlowEngine --> EventStore : persiste
+    FlowEngine --> PolicyEngine : consulta
+    StepDefinition --> ExecutionContext : ejecuta en
+    StepDefinition --> Artifact : consume/produce
+    PropertySelectionPolicy ..> StepDefinition : configura
+    RetryPolicy ..> FlowEngine : guía
+    EVENT_LOG ..> FlowInstance : reconstruye
+    WORKFLOW_BRANCHES ..> FlowInstance : ramifica
+    STEP_EXECUTION_ERRORS ..> FlowInstance : registra errores
+    UIClient ..> EventStore : lee
+    HPCDispatcher ..> FlowEngine : despacha
 ```
 
 ## 3. Modelo de Dominio – Diagramas e Invariantes
@@ -167,30 +169,30 @@ Muestra cómo entidades químicas se encapsulan en artifacts neutrales para el C
 
 ```mermaid
 classDiagram
-	class Molecule {+inchikey +smiles +inchi}
-	class MoleculeFamily {+id +ordered_keys +family_hash +frozen}
-	class MolecularProperty {+id +molecule_inchikey +kind +value +units? +preferred}
-	class FamilyAggregate {+id +family_id +aggregate_name +aggregate_value}
-	class DomainStepAdapter {+collect_inputs() +emit_artifacts()}
-	class Artifact {+id +kind +hash +payload}
-	class ArtifactKind
-	class StepDefinition
-	class PropertySelectionPolicy
-	class FlowEvent {+seq +ts +payload}
-	class FlowEngine
+    class Molecule {+inchikey +smiles +inchi}
+    class MoleculeFamily {+id +ordered_keys +family_hash +frozen}
+    class MolecularProperty {+id +molecule_inchikey +kind +value +units? +preferred}
+    class FamilyAggregate {+id +family_id +aggregate_name +aggregate_value}
+    class DomainStepAdapter {+collect_inputs() +emit_artifacts()}
+    class Artifact {+id +kind +hash +payload}
+    class ArtifactKind
+    class StepDefinition
+    class PropertySelectionPolicy
+    class FlowEvent {+seq +ts +payload}
+    class FlowEngine
 
-	MoleculeFamily --> Molecule : contiene
-	MolecularProperty --> Molecule : describe
-	FamilyAggregate --> MoleculeFamily : deriva
-	DomainStepAdapter ..> MolecularProperty
-	DomainStepAdapter ..> FamilyAggregate
-	DomainStepAdapter --> Artifact : empaqueta
-	Artifact --> ArtifactKind
-	StepDefinition --> Artifact : produce
-	StepDefinition --> ArtifactKind : declara inputs
-	PropertySelectionPolicy ..> StepDefinition
-	FlowEngine ..> StepDefinition
-	FlowEngine ..> FlowEvent
+    MoleculeFamily --> Molecule : contiene
+    MolecularProperty --> Molecule : describe
+    FamilyAggregate --> MoleculeFamily : deriva
+    DomainStepAdapter ..> MolecularProperty
+    DomainStepAdapter ..> FamilyAggregate
+    DomainStepAdapter --> Artifact : empaqueta
+    Artifact --> ArtifactKind
+    StepDefinition --> Artifact : produce
+    StepDefinition --> ArtifactKind : declara inputs
+    PropertySelectionPolicy ..> StepDefinition
+    FlowEngine ..> StepDefinition
+    FlowEngine ..> FlowEvent
 ```
 
 ### 3.2 Invariantes Dominio
@@ -224,24 +226,24 @@ Representación sugerida (enum dominio):
 ```rust
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum MolecularPropertyKind {
-	LogP,
-	LogD,
-	PKa,
-	LogS,
-	PesoMolecular,
-	PSA,
-	VolumenMolar,
-	RefraccionMolar,
-	RotoresLibres,
-	Polarizabilidad,
-	CargaParcialAtomica,
-	EnergiaHOMO,
-	EnergiaLUMO,
-	EnergiaHidratacion,
-	PermeabilidadCaco2,
-	LD50,
-	ToxicidadPredicha,
-	// Extensible; agregar variantes mantiene compatibilidad si se serializa por nombre estable
+    LogP,
+    LogD,
+    PKa,
+    LogS,
+    PesoMolecular,
+    PSA,
+    VolumenMolar,
+    RefraccionMolar,
+    RotoresLibres,
+    Polarizabilidad,
+    CargaParcialAtomica,
+    EnergiaHOMO,
+    EnergiaLUMO,
+    EnergiaHidratacion,
+    PermeabilidadCaco2,
+    LD50,
+    ToxicidadPredicha,
+    // Extensible; agregar variantes mantiene compatibilidad si se serializa por nombre estable
 }
 ```
 
@@ -279,22 +281,22 @@ Modelo de Política:
 
 ```rust
 pub trait PropertySelectionPolicy {
-	fn choose(&self, candidates: &[PropertyCandidate]) -> SelectionOutcome;
+    fn choose(&self, candidates: &[PropertyCandidate]) -> SelectionOutcome;
 }
 
 pub struct PropertyCandidate<'a> {
-	pub value_id: Uuid,
-	pub provider: &'a str,
-	pub version: &'a str,
-	pub quality: Option<f64>,
-	pub timestamp: chrono::DateTime<chrono::Utc>,
-	pub value: &'a serde_json::Value,
+    pub value_id: Uuid,
+    pub provider: &'a str,
+    pub version: &'a str,
+    pub quality: Option<f64>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub value: &'a serde_json::Value,
 }
 
 pub enum SelectionOutcome {
-	Chosen { value_id: Uuid, score: f64, rationale: serde_json::Value },
-	Tie(Vec<Uuid>),          // puede disparar estrategia secundaria
-	Aggregate { value_id: Uuid, method: String }, // p.ej. promedio z-normalizado
+    Chosen { value_id: Uuid, score: f64, rationale: serde_json::Value },
+    Tie(Vec<Uuid>),          // puede disparar estrategia secundaria
+    Aggregate { value_id: Uuid, method: String }, // p.ej. promedio z-normalizado
 }
 ```
 
@@ -310,20 +312,20 @@ Diagrama de secuencia (selección en Step de propiedades):
 
 ```mermaid
 sequenceDiagram
-	participant SD as ComputePropertiesStep
-	participant PR as PropertySelectionPolicy
-	participant DB as Store
-	SD->>DB: insert(new property values)
-	SD->>DB: fetch all (molecule, property_kind)
-	DB-->>SD: candidates[]
-	SD->>PR: choose(candidates)
-	PR-->>SD: SelectionOutcome
-	alt Chosen/Aggregate
-		SD->>DB: mark preferred (value_id)
-		SD->>ES: PropertyPreferenceAssigned
-	else Tie
-		SD->>ES: PropertyPreferenceAssigned (tie rationale)
-	end
+    participant SD as ComputePropertiesStep
+    participant PR as PropertySelectionPolicy
+    participant DB as Store
+    SD->>DB: insert(new property values)
+    SD->>DB: fetch all (molecule, property_kind)
+    DB-->>SD: candidates[]
+    SD->>PR: choose(candidates)
+    PR-->>SD: SelectionOutcome
+    alt Chosen/Aggregate
+        SD->>DB: mark preferred (value_id)
+        SD->>ES: PropertyPreferenceAssigned
+    else Tie
+        SD->>ES: PropertyPreferenceAssigned (tie rationale)
+    end
 ```
 
 Persistencia de la elección:
@@ -524,38 +526,38 @@ Incluye elementos extendidos: Branching, Retries y Registro de Errores.
 
 ```mermaid
 classDiagram
-	class FlowEngine {+next() +branch() +recover() +resume_user_input()}
-	class FlowDefinition {+steps: Vec~StepDefinition~}
-	class FlowInstance {+id +cursor +branch_id +status_summary()}
-	class WORKFLOW_BRANCHES {+branch_id +root_flow_id +parent_flow_id? +created_from_step_id}
-	class BranchMetadata {+divergence_params +reason}
-	class StepSlot {+index +status +fingerprint +retry_count}
-	class StepDefinition
-	class RetryPolicy {+should_retry(error,attempt)->bool}
-	class ParamInjector
-	class CompositeInjector {+delegates[]}
-	class ExecutionContext {+inputs[] +params +event_sink}
-	class EventStore {+append() +list()}
-	class STEP_EXECUTION_ERRORS {+error_id +step_id +attempt_number +error_class}
-	class Artifact {+id +kind +hash}
-	class PolicyEngine {+decide_branch() +decide_retry()}
-	class PropertySelectionPolicy
+    class FlowEngine {+next() +branch() +recover() +resume_user_input()}
+    class FlowDefinition {+steps: Vec~StepDefinition~}
+    class FlowInstance {+id +cursor +branch_id +status_summary()}
+    class WORKFLOW_BRANCHES {+branch_id +root_flow_id +parent_flow_id? +created_from_step_id}
+    class BranchMetadata {+divergence_params +reason}
+    class StepSlot {+index +status +fingerprint +retry_count}
+    class StepDefinition
+    class RetryPolicy {+should_retry(error,attempt)->bool}
+    class ParamInjector
+    class CompositeInjector {+delegates[]}
+    class ExecutionContext {+inputs[] +params +event_sink}
+    class EventStore {+append() +list()}
+    class STEP_EXECUTION_ERRORS {+error_id +step_id +attempt_number +error_class}
+    class Artifact {+id +kind +hash}
+    class PolicyEngine {+decide_branch() +decide_retry()}
+    class PropertySelectionPolicy
 
-	FlowEngine --> FlowDefinition
-	FlowEngine --> FlowInstance
-	FlowEngine --> PolicyEngine
-	FlowInstance --> StepSlot
-	StepSlot --> StepDefinition
-	StepSlot --> Artifact
-	CompositeInjector ..|> ParamInjector
-	FlowEngine --> ParamInjector
-	FlowEngine --> EventStore
-	StepDefinition --> ExecutionContext
-	RetryPolicy <.. PolicyEngine
-	PropertySelectionPolicy <.. StepDefinition
-	FlowInstance --> WORKFLOW_BRANCHES : belongs to
-	WORKFLOW_BRANCHES --> BranchMetadata
-	StepSlot --> STEP_EXECUTION_ERRORS : errores*
+    FlowEngine --> FlowDefinition
+    FlowEngine --> FlowInstance
+    FlowEngine --> PolicyEngine
+    FlowInstance --> StepSlot
+    StepSlot --> StepDefinition
+    StepSlot --> Artifact
+    CompositeInjector ..|> ParamInjector
+    FlowEngine --> ParamInjector
+    FlowEngine --> EventStore
+    StepDefinition --> ExecutionContext
+    RetryPolicy <.. PolicyEngine
+    PropertySelectionPolicy <.. StepDefinition
+    FlowInstance --> WORKFLOW_BRANCHES : belongs to
+    WORKFLOW_BRANCHES --> BranchMetadata
+    StepSlot --> STEP_EXECUTION_ERRORS : errores*
 ```
 
 ## 6. Ciclo de Vida Step (0–7) + State Machine
@@ -571,18 +573,18 @@ classDiagram
 
 ```mermaid
 stateDiagram-v2
-	[*] --> Pending
-	Pending --> Running: StepStarted
-	Running --> Completed: StepCompleted
-	Running --> Failed: StepFailed
-	Running --> AwaitingUserInput: UserInteractionRequested
-	AwaitingUserInput --> Running: UserInteractionProvided
-	Pending --> Skipped: StepSkipped
-	Failed --> Pending: RetryScheduled
-	Pending --> Cancelled: StepCancelled
-	Completed --> [*]
-	Skipped --> [*]
-	Cancelled --> [*]
+    [*] --> Pending
+    Pending --> Running: StepStarted
+    Running --> Completed: StepCompleted
+    Running --> Failed: StepFailed
+    Running --> AwaitingUserInput: UserInteractionRequested
+    AwaitingUserInput --> Running: UserInteractionProvided
+    Pending --> Skipped: StepSkipped
+    Failed --> Pending: RetryScheduled
+    Pending --> Cancelled: StepCancelled
+    Completed --> [*]
+    Skipped --> [*]
+    Cancelled --> [*]
 ```
 
 ### 6.1 Diagrama de Flujo General End‑to‑End
@@ -624,11 +626,11 @@ Orden estable (afecta reproducibilidad):
 
 ```text
 merged = canonical_merge(
-	base_params,
-	injector_chain(flow,i),
-	user_overrides?,
-	human_gate_payload?,
-	// runtime_derived  (NO entra en fingerprint)
+    base_params,
+    injector_chain(flow,i),
+    user_overrides?,
+    human_gate_payload?,
+    // runtime_derived  (NO entra en fingerprint)
 )
 ```
 
@@ -678,9 +680,9 @@ Relación:
 
 ```
 ROOT FLOW (branch_id = B0)
-	Step 0 ... Step N  (último común)
-			| branch(from_step=N)
-			v
+    Step 0 ... Step N  (último común)
+            | branch(from_step=N)
+            v
 CHILD FLOW (branch_id = B1, parent_flow_id = root_flow_id, created_from_step_id = Step N)
 ```
 
@@ -690,19 +692,19 @@ Rehidratación: para reconstruir una rama basta cargar `WORKFLOW_BRANCHES` y lue
 
 ```mermaid
 sequenceDiagram
-	participant FE as FlowEngine
-	participant DB as DB
-	participant PFlow as ParentFlow
-	participant CFlow as ChildFlow
-	FE->>PFlow: branch(from_step = N)
-	PFlow-->>FE: confirmar estado Step N (Completed)
-	FE->>DB: SELECT events[0..N], steps metadata
-	DB-->>FE: snapshot parcial
-	FE->>DB: INSERT WORKFLOW_BRANCHES(branch_id, root_flow_id, parent_flow_id, created_from_step_id, divergence_params)
-	FE->>DB: INSERT FlowInstance (child) con branch_id
-	FE->>DB: INSERT Steps futuros (Pending) con branch_id
-	FE->>DB: APPEND EVENT_LOG BranchCreated { branch_id, parent_flow_id, root_flow_id, created_from_step_id }
-	FE-->>CFlow: instancia lista (cursor=N+1)
+    participant FE as FlowEngine
+    participant DB as DB
+    participant PFlow as ParentFlow
+    participant CFlow as ChildFlow
+    FE->>PFlow: branch(from_step = N)
+    PFlow-->>FE: confirmar estado Step N (Completed)
+    FE->>DB: SELECT events[0..N], steps metadata
+    DB-->>FE: snapshot parcial
+    FE->>DB: INSERT WORKFLOW_BRANCHES(branch_id, root_flow_id, parent_flow_id, created_from_step_id, divergence_params)
+    FE->>DB: INSERT FlowInstance (child) con branch_id
+    FE->>DB: INSERT Steps futuros (Pending) con branch_id
+    FE->>DB: APPEND EVENT_LOG BranchCreated { branch_id, parent_flow_id, root_flow_id, created_from_step_id }
+    FE-->>CFlow: instancia lista (cursor=N+1)
 ```
 
 El evento `BranchCreated` ahora incluye explícitamente: `branch_id`, `parent_flow_id`, `root_flow_id`, `created_from_step_id`, `divergence_params_hash` para auditoría mínima sin volcar JSON completo (este último derivado de `divergence_params`).
@@ -745,162 +747,162 @@ Beneficios: auditoría precisa, métricas MTTR/MTBF y selección inteligente de 
 
 ```mermaid
 erDiagram
-		MOLECULES ||--o{ MOLECULE_FAMILY_MEMBERS : member
-		MOLECULE_FAMILIES ||--o{ MOLECULE_FAMILY_MEMBERS : contains
-		MOLECULE_FAMILIES ||--o{ FAMILY_AGGREGATES : has
-		MOLECULES ||--o{ MOLECULAR_PROPERTIES : has
-		MOLECULAR_PROPERTIES ||--o{ PROPERTY_PROVENANCE : provenance
-		FAMILY_PROPERTIES ||--o{ PROPERTY_PROVENANCE : provenance_family
-		WORKFLOW_BRANCHES ||--o{ WORKFLOW_STEP_EXECUTIONS : groups
-		WORKFLOW_STEP_EXECUTIONS ||--o{ WORKFLOW_STEP_FAMILY : links
-		WORKFLOW_STEP_EXECUTIONS ||--o{ WORKFLOW_STEP_ARTIFACTS : produces
-		WORKFLOW_STEP_EXECUTIONS ||--o{ WORKFLOW_STEP_ARTIFACT_LINK : consumes
-		WORKFLOW_STEP_EXECUTIONS ||--o{ WORKFLOW_STEP_RESULTS : produces
-		WORKFLOW_STEP_ARTIFACTS ||--o{ WORKFLOW_STEP_ARTIFACT_LINK : referenced
-		WORKFLOW_STEP_EXECUTIONS ||--o{ STEP_EXECUTION_ERRORS : logs
-		WORKFLOW_STEP_EXECUTIONS ||--o{ EVENT_LOG : emits
+        MOLECULES ||--o{ MOLECULE_FAMILY_MEMBERS : member
+        MOLECULE_FAMILIES ||--o{ MOLECULE_FAMILY_MEMBERS : contains
+        MOLECULE_FAMILIES ||--o{ FAMILY_AGGREGATES : has
+        MOLECULES ||--o{ MOLECULAR_PROPERTIES : has
+        MOLECULAR_PROPERTIES ||--o{ PROPERTY_PROVENANCE : provenance
+        FAMILY_PROPERTIES ||--o{ PROPERTY_PROVENANCE : provenance_family
+        WORKFLOW_BRANCHES ||--o{ WORKFLOW_STEP_EXECUTIONS : groups
+        WORKFLOW_STEP_EXECUTIONS ||--o{ WORKFLOW_STEP_FAMILY : links
+        WORKFLOW_STEP_EXECUTIONS ||--o{ WORKFLOW_STEP_ARTIFACTS : produces
+        WORKFLOW_STEP_EXECUTIONS ||--o{ WORKFLOW_STEP_ARTIFACT_LINK : consumes
+        WORKFLOW_STEP_EXECUTIONS ||--o{ WORKFLOW_STEP_RESULTS : produces
+        WORKFLOW_STEP_ARTIFACTS ||--o{ WORKFLOW_STEP_ARTIFACT_LINK : referenced
+        WORKFLOW_STEP_EXECUTIONS ||--o{ STEP_EXECUTION_ERRORS : logs
+        WORKFLOW_STEP_EXECUTIONS ||--o{ EVENT_LOG : emits
 
-		MOLECULES {
-			TEXT inchikey PK
-			TEXT smiles
-			TEXT inchi
-			TEXT common_name
-		}
+        MOLECULES {
+            TEXT inchikey PK
+            TEXT smiles
+            TEXT inchi
+            TEXT common_name
+        }
 
-		MOLECULE_FAMILIES {
-			UUID id PK
-			JSONB provenance
-			BOOLEAN frozen
-			TEXT family_hash
-		}
+        MOLECULE_FAMILIES {
+            UUID id PK
+            JSONB provenance
+            BOOLEAN frozen
+            TEXT family_hash
+        }
 
-		MOLECULE_FAMILY_MEMBERS {
-			UUID family_id FK
-			TEXT molecule_inchikey FK
-			INT position
-		}
+        MOLECULE_FAMILY_MEMBERS {
+            UUID family_id FK
+            TEXT molecule_inchikey FK
+            INT position
+        }
 
-		MOLECULAR_PROPERTIES {
-			UUID id PK
-			TEXT molecule_inchikey FK
-			TEXT property_name
-			JSONB value
-			TEXT units
-			BOOLEAN preferred
-			TEXT value_hash
-		}
+        MOLECULAR_PROPERTIES {
+            UUID id PK
+            TEXT molecule_inchikey FK
+            TEXT property_name
+            JSONB value
+            TEXT units
+            BOOLEAN preferred
+            TEXT value_hash
+        }
 
-		FAMILY_PROPERTIES {
-			UUID id PK
-			UUID family_id FK
-			TEXT property_name
-			JSONB aggregation
-			TEXT aggregation_method
-			TEXT aggregation_hash
-		}
+        FAMILY_PROPERTIES {
+            UUID id PK
+            UUID family_id FK
+            TEXT property_name
+            JSONB aggregation
+            TEXT aggregation_method
+            TEXT aggregation_hash
+        }
 
-		PROPERTY_PROVENANCE {
-			UUID provenance_id PK
-			UUID molecular_property_id FK
-			UUID family_property_id FK
-			TEXT provider_name
-			TEXT provider_version
-			UUID step_id FK
-		}
+        PROPERTY_PROVENANCE {
+            UUID provenance_id PK
+            UUID molecular_property_id FK
+            UUID family_property_id FK
+            TEXT provider_name
+            TEXT provider_version
+            UUID step_id FK
+        }
 
-		FAMILY_AGGREGATES {
-			UUID id PK
-			UUID family_id FK
-			TEXT aggregate_name
-			JSONB aggregate_value
-			TEXT aggregate_hash
-			TEXT method
-		}
+        FAMILY_AGGREGATES {
+            UUID id PK
+            UUID family_id FK
+            TEXT aggregate_name
+            JSONB aggregate_value
+            TEXT aggregate_hash
+            TEXT method
+        }
 
-		FAMILY_AGGREGATE_NUMERIC {
-			UUID id PK
-			UUID family_id FK
-			TEXT aggregate_name
-			DOUBLE value
-			TEXT method
-			TEXT value_hash
-		}
+        FAMILY_AGGREGATE_NUMERIC {
+            UUID id PK
+            UUID family_id FK
+            TEXT aggregate_name
+            DOUBLE value
+            TEXT method
+            TEXT value_hash
+        }
 
-		WORKFLOW_BRANCHES {
-			UUID branch_id PK
-			UUID root_flow_id
-			UUID parent_flow_id
-			UUID created_from_step_id FK
-			TIMESTAMPTZ created_at
-			TEXT reason
-			JSONB divergence_params
-		}
+        WORKFLOW_BRANCHES {
+            UUID branch_id PK
+            UUID root_flow_id
+            UUID parent_flow_id
+            UUID created_from_step_id FK
+            TIMESTAMPTZ created_at
+            TEXT reason
+            JSONB divergence_params
+        }
 
-		WORKFLOW_STEP_EXECUTIONS {
-			UUID step_id PK
-			UUID branch_id FK
-			TEXT status
-			INT retry_count
-			INT max_retries
-			JSONB parameters
-			TEXT parameter_hash
-			JSONB providers_used
-			TIMESTAMPTZ start_time
-			TIMESTAMPTZ end_time
-			UUID root_execution_id
-			UUID parent_step_id
-			UUID branch_from_step_id
-		}
+        WORKFLOW_STEP_EXECUTIONS {
+            UUID step_id PK
+            UUID branch_id FK
+            TEXT status
+            INT retry_count
+            INT max_retries
+            JSONB parameters
+            TEXT parameter_hash
+            JSONB providers_used
+            TIMESTAMPTZ start_time
+            TIMESTAMPTZ end_time
+            UUID root_execution_id
+            UUID parent_step_id
+            UUID branch_from_step_id
+        }
 
-		WORKFLOW_STEP_FAMILY {
-			UUID step_id FK
-			UUID family_id FK
-			TEXT role
-		}
+        WORKFLOW_STEP_FAMILY {
+            UUID step_id FK
+            UUID family_id FK
+            TEXT role
+        }
 
-		WORKFLOW_STEP_ARTIFACTS {
-			UUID artifact_id PK
-			TEXT artifact_type
-			TEXT artifact_hash
-			JSONB payload
-			JSONB metadata
-			UUID produced_in_step FK
-		}
+        WORKFLOW_STEP_ARTIFACTS {
+            UUID artifact_id PK
+            TEXT artifact_type
+            TEXT artifact_hash
+            JSONB payload
+            JSONB metadata
+            UUID produced_in_step FK
+        }
 
-		WORKFLOW_STEP_ARTIFACT_LINK {
-			UUID step_id FK
-			UUID artifact_id FK
-			TEXT role
-		}
+        WORKFLOW_STEP_ARTIFACT_LINK {
+            UUID step_id FK
+            UUID artifact_id FK
+            TEXT role
+        }
 
-		WORKFLOW_STEP_RESULTS {
-			UUID step_id FK
-			TEXT result_key
-			JSONB result_value
-			TEXT result_type
-			TEXT result_hash
-		}
+        WORKFLOW_STEP_RESULTS {
+            UUID step_id FK
+            TEXT result_key
+            JSONB result_value
+            TEXT result_type
+            TEXT result_hash
+        }
 
-		STEP_EXECUTION_ERRORS {
-			UUID error_id PK
-			UUID step_id FK
-			INT attempt_number
-			TIMESTAMPTZ ts
-			TEXT error_class
-			TEXT error_code
-			TEXT message
-			JSONB details
-			BOOLEAN transient
-		}
+        STEP_EXECUTION_ERRORS {
+            UUID error_id PK
+            UUID step_id FK
+            INT attempt_number
+            TIMESTAMPTZ ts
+            TEXT error_class
+            TEXT error_code
+            TEXT message
+            JSONB details
+            BOOLEAN transient
+        }
 
-		EVENT_LOG {
-			BIGSERIAL seq PK
-			UUID flow_id
-			UUID step_id
-			TEXT event_type
-			JSONB payload
-			TIMESTAMPTZ ts
-		}
+        EVENT_LOG {
+            BIGSERIAL seq PK
+            UUID flow_id
+            UUID step_id
+            TEXT event_type
+            JSONB payload
+            TIMESTAMPTZ ts
+        }
 ```
 
 ### 12.1 Estandarización de Nombres (Consistencia)
@@ -1190,16 +1192,16 @@ Objetivo: guiar la implementación de un Step alineado con los diagramas (clases
 
 ```rust
 pub trait StepDefinition {
-	fn id(&self) -> Uuid;                // Identificador estable (persistencia / eventos)
-	fn name(&self) -> &str;              // Nombre legible
-	fn kind(&self) -> StepKind;          // Clasificación semántica
-	fn required_input_kinds(&self) -> &[ArtifactKind];
-	fn base_params(&self) -> Value;      // Declaración estática inicial
-	fn validate_params(&self, merged: &Value) -> Result<Value, StepError>;
-	fn run(&self, ctx: &mut ExecutionContext, params: &Value) -> Result<RunOutput, StepError>;
-	fn fingerprint(&self, inputs: &[ArtifactRef], params: &Value) -> Fingerprint;
-	fn rehydrate(meta: RehydrateMeta) -> Self where Self: Sized;      // Recovery
-	fn clone_for_branch(&self) -> Self where Self: Sized;             // Branching
+    fn id(&self) -> Uuid;                // Identificador estable (persistencia / eventos)
+    fn name(&self) -> &str;              // Nombre legible
+    fn kind(&self) -> StepKind;          // Clasificación semántica
+    fn required_input_kinds(&self) -> &[ArtifactKind];
+    fn base_params(&self) -> Value;      // Declaración estática inicial
+    fn validate_params(&self, merged: &Value) -> Result<Value, StepError>;
+    fn run(&self, ctx: &mut ExecutionContext, params: &Value) -> Result<RunOutput, StepError>;
+    fn fingerprint(&self, inputs: &[ArtifactRef], params: &Value) -> Fingerprint;
+    fn rehydrate(meta: RehydrateMeta) -> Self where Self: Sized;      // Recovery
+    fn clone_for_branch(&self) -> Self where Self: Sized;             // Branching
 }
 ```
 
@@ -1223,95 +1225,95 @@ use serde_json::{json, Value};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StaticParams {
-	pub min: f64,
-	pub max: f64,
-	pub strategy: String,      // "zscore" | "minmax"
-	pub seed: Option<u64>,
+    pub min: f64,
+    pub max: f64,
+    pub strategy: String,      // "zscore" | "minmax"
+    pub seed: Option<u64>,
 }
 
 pub struct NormalizePropertiesStep {
-	id: Uuid,
-	static_params: StaticParams,
-	internal_version: &'static str, // para fingerprint / migraciones
+    id: Uuid,
+    static_params: StaticParams,
+    internal_version: &'static str, // para fingerprint / migraciones
 }
 
 impl NormalizePropertiesStep {
-	pub fn new(static_params: StaticParams) -> Self {
-		Self { id: Uuid::new_v4(), static_params, internal_version: "v1" }
-	}
-	pub fn rehydrate_with(id: Uuid, static_params: StaticParams, internal_version: &'static str) -> Self {
-		Self { id, static_params, internal_version }
-	}
+    pub fn new(static_params: StaticParams) -> Self {
+        Self { id: Uuid::new_v4(), static_params, internal_version: "v1" }
+    }
+    pub fn rehydrate_with(id: Uuid, static_params: StaticParams, internal_version: &'static str) -> Self {
+        Self { id, static_params, internal_version }
+    }
 }
 
 impl StepDefinition for NormalizePropertiesStep {
-	fn id(&self) -> Uuid { self.id }
-	fn name(&self) -> &str { "NormalizeProperties" }
-	fn kind(&self) -> StepKind { StepKind::Custom("NormalizeProperties") }
-	fn required_input_kinds(&self) -> &[ArtifactKind] {
-		const KINDS: &[ArtifactKind] = &[ArtifactKind::PropertiesTable];
-		KINDS
-	}
-	fn base_params(&self) -> Value { serde_json::to_value(&self.static_params).unwrap() }
+    fn id(&self) -> Uuid { self.id }
+    fn name(&self) -> &str { "NormalizeProperties" }
+    fn kind(&self) -> StepKind { StepKind::Custom("NormalizeProperties") }
+    fn required_input_kinds(&self) -> &[ArtifactKind] {
+        const KINDS: &[ArtifactKind] = &[ArtifactKind::PropertiesTable];
+        KINDS
+    }
+    fn base_params(&self) -> Value { serde_json::to_value(&self.static_params).unwrap() }
 
-	fn validate_params(&self, merged: &Value) -> Result<Value, StepError> {
-		let min = merged.get("min").and_then(|v| v.as_f64()).ok_or_else(|| StepError::invalid("missing min"))?;
-		let max = merged.get("max").and_then(|v| v.as_f64()).ok_or_else(|| StepError::invalid("missing max"))?;
-		if !(min < max) { return Err(StepError::invalid("min must be < max")); }
-		let strategy = merged.get("strategy").and_then(|v| v.as_str()).unwrap_or("");
-		if strategy != "zscore" && strategy != "minmax" { return Err(StepError::invalid("unsupported strategy")); }
-		if let Some(dt) = merged.get("dynamic_threshold").and_then(|v| v.as_f64()) {
-			if dt < 0.0 || dt > 1.0 { return Err(StepError::invalid("dynamic_threshold out of [0,1]")); }
-		}
-		Ok(merged.clone())
-	}
+    fn validate_params(&self, merged: &Value) -> Result<Value, StepError> {
+        let min = merged.get("min").and_then(|v| v.as_f64()).ok_or_else(|| StepError::invalid("missing min"))?;
+        let max = merged.get("max").and_then(|v| v.as_f64()).ok_or_else(|| StepError::invalid("missing max"))?;
+        if !(min < max) { return Err(StepError::invalid("min must be < max")); }
+        let strategy = merged.get("strategy").and_then(|v| v.as_str()).unwrap_or("");
+        if strategy != "zscore" && strategy != "minmax" { return Err(StepError::invalid("unsupported strategy")); }
+        if let Some(dt) = merged.get("dynamic_threshold").and_then(|v| v.as_f64()) {
+            if dt < 0.0 || dt > 1.0 { return Err(StepError::invalid("dynamic_threshold out of [0,1]")); }
+        }
+        Ok(merged.clone())
+    }
 
-	fn run(&self, ctx: &mut ExecutionContext, params: &Value) -> Result<RunOutput, StepError> {
-		if ctx.inputs.is_empty() { return Err(StepError::invalid("no input artifacts")); }
-		let derived_cutoff = ctx.inputs.first()
-			.and_then(|a| a.metadata.get("mean_logP").and_then(|v| v.as_f64()))
-			.unwrap_or(0.5);
-		ctx.event_sink.emit(FlowEventPayload::ProviderInvoked {
-			provider_id: "norm-core".into(),
-			version: self.internal_version.into(),
-			params_hash: short_hash(params),
-		});
-		let artifact_payload = json!({
-			"strategy": params.get("strategy").cloned().unwrap_or(Value::String("minmax".into())),
-			"derived_cutoff": derived_cutoff,
-			"normalized_count": 1234,
-		});
-		let artifact_hash = hash_json(&artifact_payload);
-		let artifact = Artifact::new(
-			ArtifactKind::NormalizedProperties,
-			artifact_hash.clone(),
-			artifact_payload,
-			json!({"source_step": self.id, "schema_version": 1})
-		);
-		ctx.event_sink.emit(FlowEventPayload::ArtifactCreated {
-			artifact_id: artifact.id,
-			kind: artifact.kind,
-			hash: artifact.hash.clone(),
-		});
-		Ok(RunOutput { artifacts: vec![artifact], metadata: json!({"derived_cutoff": derived_cutoff}) })
-	}
+    fn run(&self, ctx: &mut ExecutionContext, params: &Value) -> Result<RunOutput, StepError> {
+        if ctx.inputs.is_empty() { return Err(StepError::invalid("no input artifacts")); }
+        let derived_cutoff = ctx.inputs.first()
+            .and_then(|a| a.metadata.get("mean_logP").and_then(|v| v.as_f64()))
+            .unwrap_or(0.5);
+        ctx.event_sink.emit(FlowEventPayload::ProviderInvoked {
+            provider_id: "norm-core".into(),
+            version: self.internal_version.into(),
+            params_hash: short_hash(params),
+        });
+        let artifact_payload = json!({
+            "strategy": params.get("strategy").cloned().unwrap_or(Value::String("minmax".into())),
+            "derived_cutoff": derived_cutoff,
+            "normalized_count": 1234,
+        });
+        let artifact_hash = hash_json(&artifact_payload);
+        let artifact = Artifact::new(
+            ArtifactKind::NormalizedProperties,
+            artifact_hash.clone(),
+            artifact_payload,
+            json!({"source_step": self.id, "schema_version": 1})
+        );
+        ctx.event_sink.emit(FlowEventPayload::ArtifactCreated {
+            artifact_id: artifact.id,
+            kind: artifact.kind,
+            hash: artifact.hash.clone(),
+        });
+        Ok(RunOutput { artifacts: vec![artifact], metadata: json!({"derived_cutoff": derived_cutoff}) })
+    }
 
-	fn fingerprint(&self, inputs: &[ArtifactRef], params: &Value) -> Fingerprint {
-		let mut hashes: Vec<&str> = inputs.iter().map(|r| r.hash.as_str()).collect();
-		hashes.sort();
-		let canonical = canonical_json(params);
-		Fingerprint::new(format!("{}|{}|{}", hashes.join("+"), canonical, self.internal_version))
-	}
+    fn fingerprint(&self, inputs: &[ArtifactRef], params: &Value) -> Fingerprint {
+        let mut hashes: Vec<&str> = inputs.iter().map(|r| r.hash.as_str()).collect();
+        hashes.sort();
+        let canonical = canonical_json(params);
+        Fingerprint::new(format!("{}|{}|{}", hashes.join("+"), canonical, self.internal_version))
+    }
 
-	fn rehydrate(meta: RehydrateMeta) -> Self where Self: Sized {
-		let static_params: StaticParams = serde_json::from_value(meta.serialized_params)
-			.expect("params deserialize");
-		Self::rehydrate_with(meta.id, static_params, meta.internal_version)
-	}
+    fn rehydrate(meta: RehydrateMeta) -> Self where Self: Sized {
+        let static_params: StaticParams = serde_json::from_value(meta.serialized_params)
+            .expect("params deserialize");
+        Self::rehydrate_with(meta.id, static_params, meta.internal_version)
+    }
 
-	fn clone_for_branch(&self) -> Self where Self: Sized {
-		Self { id: Uuid::new_v4(), static_params: self.static_params.clone(), internal_version: self.internal_version }
-	}
+    fn clone_for_branch(&self) -> Self where Self: Sized {
+        Self { id: Uuid::new_v4(), static_params: self.static_params.clone(), internal_version: self.internal_version }
+    }
 }
 ```
 
@@ -1667,14 +1669,14 @@ Workspace (añade librerías para observabilidad y async, manteniendo compatibil
 ```toml
 [workspace]
 members = [
-	"crates/chem-domain",
-	"crates/chem-core",
-	"crates/chem-adapters",
-	"crates/chem-persistence",
-	"crates/chem-policies",
-	"crates/chem-providers",
-	"crates/chem-cli",
-	"crates/chem-infra"
+    "crates/chem-domain",
+    "crates/chem-core",
+    "crates/chem-adapters",
+    "crates/chem-persistence",
+    "crates/chem-policies",
+    "crates/chem-providers",
+    "crates/chem-cli",
+    "crates/chem-infra"
 ]
 
 [workspace.package]
