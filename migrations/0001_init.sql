@@ -1,24 +1,8 @@
--- 0001_init.sql
--- Create tables for workflow executions and molecule families
-CREATE TABLE IF NOT EXISTS workflow_step_executions (
-    step_id UUID PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT,
-    status TEXT NOT NULL,
-    parameters JSONB NOT NULL DEFAULT '{}'::jsonb,
-    providers_used JSONB NOT NULL DEFAULT '[]'::jsonb,
-    start_time TIMESTAMPTZ NOT NULL,
-    end_time TIMESTAMPTZ NOT NULL
-);
-CREATE TABLE IF NOT EXISTS molecule_families (
-    id UUID PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT,
-    molecules JSONB NOT NULL DEFAULT '[]'::jsonb,
-    properties JSONB NOT NULL DEFAULT '{}'::jsonb,
-    parameters JSONB NOT NULL DEFAULT '{}'::jsonb,
-    source_provider JSONB
-);
--- Indexes for querying by status and time
-CREATE INDEX IF NOT EXISTS idx_workflow_step_status ON workflow_step_executions(status);
-CREATE INDEX IF NOT EXISTS idx_workflow_step_start_time ON workflow_step_executions(start_time);
+-- -----------------------------------------------------------------------------
+-- 0001_init.sql (UNIFICADA)
+-- Esquema inicial consolidado: combina el contenido de las migraciones previas
+-- Fuente de verdad tomada de las estructuras actuales usadas en el código
+-- (ver `repository.rs`). Se eliminan columnas legacy (p.ej. source_provider)
+-- ya deprecadas y se incluyen todas las nuevas (parameter_hash, provenance,
+-- result_type, etc.). Seguro de ejecutar múltiples veces (IF NOT EXISTS).
+-- -----------------------------------------------------------------------------
