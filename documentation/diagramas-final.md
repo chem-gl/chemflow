@@ -1992,8 +1992,26 @@ GATE_F6:
 
 ### F7 – Retry Manual Mínimo
 
-| Núcleo                                                                                                     | Contrato Estabilizado                   | GATE_F7                | Paralelo Seguro                 |
-| ---------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |
+| Núcleo | Contrato Estabilizado | GATE_F7 | Paralelo Seguro |
+| -----------------------------------Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+Pipeline CI: cargo fmt --check, cargo clippy --all-Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
+Módulo hashing::canonical_json único (no duplicar lógica).
+Crear CoreError / DomainError con thiserror.
+Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+Esqueleto README.md + CONTRIBUTING.md.
+Primera build limpia confirmando baseline.targets --all-features, cargo test.
+Módulo hashing::canonical_json único (no duplicar lógica).
+Crear CoreError / DomainError con thiserror.
+Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+Esqueleto README.md + CONTRIBUTING.md.
+Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
+Módulo hashing::canonical_json único (no duplicar lógica).
+Crear CoreError / DomainError con thiserror.
+Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+Esqueleto README.md + CONTRIBUTING.md.
+Primera build limpia confirmando baseline.
 | RetryPolicy (should_retry), transición Failed→Pending, retry_count memoria, evento RetryScheduled opcional | Semántica retry (no altera fingerprint) | Backoff diseño inicial | Borrador estrategia exponencial |
 
 Objetivos Clave:
@@ -2003,8 +2021,20 @@ Objetivos Clave:
 
 Pasos sugeridos:
 
-1. Campo `retry_count` en StepSlot.
-2. `FlowEngine::retry(step_id)`.
+1. Campo `retry_count` en StepSlot.Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+   Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
+   Módulo hashing::canonical_json único (no duplicar lógica).
+   Crear CoreError / DomainError con thiserror.
+   Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+   Esqueleto README.md + CONTRIBUTING.md.
+   Primera build limpia confirmando baseline.
+2. `FlScript check_deps.sh (usa cargo metadata) y falla en ciclos.
+Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
+Módulo hashing::canonical_json único (no duplicar lógica).
+Crear CoreError / DomainError con thiserror.
+Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+Esqueleto README.md + CONTRIBUTING.md.
+Primera build limpia confirmando baseline.owEngine::retry(step_id)`.
 3. Evento RetryScheduled (si < max).
 4. Test: exceder max rechaza.
 5. Nuevos artifacts generan nuevos IDs (no colisión hash).

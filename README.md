@@ -38,6 +38,8 @@ Crear un archivo `.env` (o exportar variables):
 
 ## Comandos Rápidos
 
+### Comandos Rápidos CLI
+
 ```bash
 # Formatear
 cargo fmt
@@ -46,3 +48,11 @@ cargo test
 # Ejecutar ejemplo
 cargo run
 ```
+
+## Contribuyendo
+
+Lee [CONTRIBUTING.md](CONTRIBUTING.md) para detalles sobre cómo contribuir al proyecto.
+
+## Licencia
+
+Este proyecto está bajo la Licencia MIT. Consulta el archivo LICENSE para más detalles.
