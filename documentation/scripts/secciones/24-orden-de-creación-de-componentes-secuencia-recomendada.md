@@ -107,11 +107,7 @@ GATE_F2:
 
 ---
 
-### F3 – Persistencia In-Memo# Sección 21 - Evolución / Versionado
-
-Estrategia: versionado lógico en `internal_version` StepDefinition + `schema_version` global. Migraciones: añadir campos → tolerancia forward; remover requiere migración de proyecciones, nunca edición histórica de EVENT_LOG.
-
-ry Contratada
+### F3 – Persistencia In-Memory Contratada
 
 | Núcleo                                                     | Contrato Estabilizado      | GATE_F3                     | Paralelo Seguro               |
 | ---------------------------------------------------------- | -------------------------- | --------------------------- | ----------------------------- |
@@ -225,8 +221,26 @@ GATE_F6:
 
 ### F7 – Retry Manual Mínimo
 
-| Núcleo                                                                                                     | Contrato Estabilizado                   | GATE_F7                | Paralelo Seguro                 |
-| ---------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |
+| Núcleo | Contrato Estabilizado | GATE_F7 | Paralelo Seguro |
+| ----------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
+Módulo hashing::canonical_json único (no duplicar lógica).
+Crear CoreError / DomainError con thiserror.
+Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+Esqueleto README.md + CONTRIBUTING.md.
+Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
+Módulo hashing::canonical_json único (no duplicar lógica).
+Crear CoreError / DomainError con thiserror.
+Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+Esqueleto README.md + CONTRIBUTING.md.
+Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
+Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
+Módulo hashing::canonical_json único (no duplicar lógica).
+Crear CoreError / DomainError con thiserror.
+Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
+Esqueleto README.md + CONTRIBUTING.md.
+Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |
 | RetryPolicy (should_retry), transición Failed→Pending, retry_count memoria, evento RetryScheduled opcional | Semántica retry (no altera fingerprint) | Backoff diseño inicial | Borrador estrategia exponencial |
 
 Objetivos Clave:
@@ -381,8 +395,7 @@ Pasos sugeridos:
 3. Test hash agregados equivalentes.
 4. Ejemplo consulta optimizada.
 5. Verificar rollback consistente.
-6. Benchmark latencia antes/después.
-7. Documentar naming agregados.
+6. Documentar naming agregados.
 
 GATE_F12:
 

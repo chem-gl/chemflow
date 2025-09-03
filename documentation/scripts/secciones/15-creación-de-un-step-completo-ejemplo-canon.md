@@ -152,6 +152,7 @@ impl StepDefinition for NormalizePropertiesStep {
 | Creación artifact     | ArtifactCreated emitido                    | run                 |
 | Metadata mínima       | source_step + schema_version               | run (Artifact::new) |
 | Campos adicionales    | derived_cutoff, normalized_count           | run                 |
+| Documentación         | Invariante y uso de props                  | README.md           |
 
 ### 15.6 Relación con Diagramas
 
