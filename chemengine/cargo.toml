@@ -1,0 +1,12 @@
+
+[package]
+name = "chemengine"
+version = "0.1.0"
+edition = "2021"
+authors = ["Cesar Gerardo guzman Lopez <cesar-gerardo@guzman-lopez.com>"]
+description = "Crate Rust para interactuar con RDKit vía Python"
+license = "MIT"
+
+[dependencies]
+pyo3 = { version = "0.26", features = ["auto-initialize"] }
+dotenvy = "0.15.7"

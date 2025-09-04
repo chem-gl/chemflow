@@ -14,7 +14,7 @@ pub struct MolecularProperty {
     quality: Option<String>,
     preferred: bool,
     value_hash: String,
-    description: Option<String>,
+    metadata: Option<serde_json::Value>,
 }
 
 impl MolecularProperty {
@@ -25,7 +25,7 @@ impl MolecularProperty {
         units: Option<String>,
         quality: Option<String>,
         preferred: bool,
-        description: Option<String>,
+        metadata: Option<serde_json::Value>,
     ) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(molecule.inchikey().as_bytes());
@@ -47,7 +47,7 @@ impl MolecularProperty {
             quality,
             preferred,
             value_hash,
-            description,
+            metadata,
         }
     }
 
