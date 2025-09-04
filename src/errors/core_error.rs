@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-/// Errores de núcleo (Core) de la aplicación
 #[derive(Debug, Error)]
 pub enum CoreError {
     #[error("Error interno: {0}")]
@@ -11,10 +10,10 @@ pub enum CoreError {
     Config(String),
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_internal_variant_format() {
         let err = CoreError::Internal("algo malo".into());
@@ -23,7 +22,7 @@ mod tests {
 
     #[test]
     fn test_io_variant_from() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "falló IO");
+        let io_err = std::io::Error::other("falló IO");
         let err: CoreError = io_err.into();
         assert_eq!(err.to_string(), "Error en IO: falló IO");
     }
