@@ -1,0 +1,8 @@
+[package]
+name = "chem-infra"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chem-core = { path = "../chem-core" }
+chem-persistence = { path = "../chem-persistence" }

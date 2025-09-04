@@ -1,0 +1,12 @@
+[package]
+name = "chem-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "chem-cli"
+path = "src/main.rs"
+
+[dependencies]
+chem-core = { path = "../chem-core" }
+chem-domain = { path = "../chem-domain" }

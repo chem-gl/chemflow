@@ -1,0 +1,8 @@
+[package]
+name = "chem-policies"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chem-core = { path = "../chem-core" }
+chem-domain = { path = "../chem-domain" }

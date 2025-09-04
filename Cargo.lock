@@ -374,6 +374,64 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "chem-adapters"
+version = "0.1.0"
+dependencies = [
+ "chem-core",
+]
+
+[[package]]
+name = "chem-cli"
+version = "0.1.0"
+dependencies = [
+ "chem-core",
+ "chem-domain",
+]
+
+[[package]]
+name = "chem-core"
+version = "0.1.0"
+dependencies = [
+ "chem-domain",
+]
+
+[[package]]
+name = "chem-domain"
+version = "0.1.0"
+
+[[package]]
+name = "chem-infra"
+version = "0.1.0"
+dependencies = [
+ "chem-core",
+ "chem-persistence",
+]
+
+[[package]]
+name = "chem-persistence"
+version = "0.1.0"
+dependencies = [
+ "chem-core",
+ "chem-domain",
+]
+
+[[package]]
+name = "chem-policies"
+version = "0.1.0"
+dependencies = [
+ "chem-core",
+ "chem-domain",
+]
+
+[[package]]
+name = "chem-providers"
+version = "0.1.0"
+dependencies = [
+ "chem-core",
+ "chem-domain",
+]
+
+[[package]]
 name = "chemflow-rust"
 version = "0.1.0"
 dependencies = [
