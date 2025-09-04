@@ -101,6 +101,18 @@ where
             metadata,
         )
     }
+
+    /// Reasigna el flag `preferred`, permitiendo marcar o desmarcar como preferido
+    pub fn with_preferred(&self, preferred: bool) -> Self {
+        MolecularProperty::new(
+            self.molecule,
+            &self.property_type,
+            self.value.clone(),
+            self.quality.clone(),
+            preferred,
+            self.metadata.clone(),
+        )
+    }
     pub fn compare(&self, other: &MolecularProperty<'a, V, TypeMeta>) -> bool {
         self.value_hash == other.value_hash
     }

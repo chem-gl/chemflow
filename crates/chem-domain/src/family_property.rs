@@ -14,7 +14,6 @@ pub struct FamilyProperty<'a, V, TypeMeta> {
     value_hash: String,
     metadata: TypeMeta,
 }
-
 impl<'a, V, TypeMeta> FamilyProperty<'a, V, TypeMeta>
 where
     V: Serialize + Clone,
@@ -34,9 +33,7 @@ where
         hasher.update(property_type.as_bytes());
         let value_json = serde_json::to_string(&value).unwrap_or_default();
         hasher.update(value_json.as_bytes());
- 
         let mut hasher = Sha256::new();
-        // Hash basado en el family_hash de la familia
         hasher.update(family.family_hash().as_bytes());
         hasher.update(property_type.as_bytes());
         let value_json = serde_json::to_string(&value).unwrap_or_default();
@@ -111,6 +108,17 @@ where
         )
     }
 
+    /// Reasigna el flag `preferred`, permitiendo marcar o desmarcar como preferido
+    pub fn with_preferred(&self, preferred: bool) -> Self {
+        FamilyProperty::new(
+            self.family,
+            &self.property_type,
+            self.value.clone(),
+            self.quality.clone(),
+            preferred,
+            self.metadata.clone(),
+        )
+    }
     pub fn compare(&self, other: &FamilyProperty<'a, V, TypeMeta>) -> bool {
         self.value_hash == other.value_hash
     }
