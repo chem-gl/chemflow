@@ -599,7 +599,7 @@ flowchart LR
     end
     subgraph Propiedades
         C[Compute Properties]
-        D[Select Preferred (Policy)]
+        D[Select Preferred -Policy-]
     end
     subgraph Agregacion
         E[Aggregate Metrics]

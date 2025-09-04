@@ -1,9 +1,7 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// Serializa un `Value` de JSON a una representación canónica:
-/// - Objetos con claves ordenadas
-/// - Sin espacios redundantes
+ 
 pub fn to_canonical_json(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),

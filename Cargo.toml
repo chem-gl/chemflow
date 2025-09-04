@@ -42,5 +42,9 @@ members = [
     "crates/chem-policies",
     "crates/chem-providers",
     "crates/chem-cli",
-    "crates/chem-infra"
+    "crates/chem-infra",
+    "crates/chem-engine"
 ]
+
+[patch.crates-io]
+pyo3 = { git = "https://github.com/PyO3/pyo3", tag = "v0.26.0" }
