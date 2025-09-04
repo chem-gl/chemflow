@@ -1,4 +1,4 @@
-use serde_json::{Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Serializa un `Value` de JSON a una representación canónica:
@@ -20,8 +20,8 @@ pub fn to_canonical_json(value: &Value) -> String {
                 tree.insert(k, to_canonical_json(v));
             }
             let items: Vec<String> = tree.into_iter()
-                .map(|(k, v)| format!("{}:{}", serde_json::to_string(&k).unwrap(), v))
-                .collect();
+                                         .map(|(k, v)| format!("{}:{}", serde_json::to_string(&k).unwrap(), v))
+                                         .collect();
             format!("{{{}}}", items.join(","))
         }
     }

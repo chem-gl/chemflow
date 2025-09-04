@@ -4,7 +4,7 @@ Objetivo: estructurar el workspace para reflejar límites arquitectónicos (Domi
 
 ### 23.1 Estructura de Carpetas (Workspace Rust)
 
-```
+````
 chemflow-rust/
 ├─ Cargo.toml                  (workspace raíz)
 ├─ rust-toolchain
@@ -109,7 +109,6 @@ chemflow-rust/
 
 ### 23.3 Dependencias Permitidas (Reglas de Capa)
 
-```
 
 chem-domain -> (ninguna interna)
 chem-core -> chem-domain
@@ -120,8 +119,6 @@ chem-providers -> chem-core, chem-domain, chem-adapters
 chem-infra -> chem-core, chem-adapters, chem-policies
 chem-cli -> chem-core, chem-adapters, chem-persistence, chem-policies, chem-providers
 tests/\* -> cualquiera (activando features)
-
-````
 
 Validación automática recomendada: script `check_deps.sh` usando `cargo metadata` + (opcional) `cargo-deny`.
 
@@ -231,4 +228,3 @@ Cada paso: commit pequeño + tests verdes + verificación de dependencias con `c
 - Integrar `cargo-nextest` para acelerar CI.
 - Añadir `criterion` para benchmarks formales y registrar tendencias.
 - Implementar plugin simple de lint de arquitectura (script que falle si se viola matriz de dependencias).
-
