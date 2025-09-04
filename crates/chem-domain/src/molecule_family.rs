@@ -15,7 +15,6 @@ pub struct MoleculeFamily {
     frozen: bool,
     molecules: Vec<Molecule>,
 }
-
 impl MoleculeFamily {
     /// Crea una familia inmutable a partir de moléculas con metadatos
     pub fn new<I>(mols: I, provenance: serde_json::Value) -> Result<Self, DomainError>
@@ -47,8 +46,7 @@ impl MoleculeFamily {
             frozen: true,
             molecules: list,
         })
-    }
-
+    } 
     pub fn with_name(&self, name: impl Into<String>) -> Self {
         let mut new = self.clone();
         new.name = Some(name.into());
@@ -69,7 +67,6 @@ impl MoleculeFamily {
         let mut list = self.molecules.clone();
         list.push(molecule);
         let id = Uuid::new_v4();
-        // Hash = sha256(inchikeys concatenados en orden de inserción)
         let mut hasher = Sha256::new();
         for m in &list {
             hasher.update(m.inchikey().as_bytes());
@@ -126,8 +123,6 @@ impl MoleculeFamily {
         self.family_hash == other.family_hash
     }
 }
-
-// Permite iterar sobre referencias a la familia devolviendo &Molecule
 impl<'a> IntoIterator for &'a MoleculeFamily {
     type Item = &'a Molecule;
     type IntoIter = std::slice::Iter<'a, Molecule>;
@@ -135,7 +130,6 @@ impl<'a> IntoIterator for &'a MoleculeFamily {
         self.molecules.iter()
     }
 }
-
 // Permite consumir la familia y obtener un iterator de Molecule
 impl IntoIterator for MoleculeFamily {
     type Item = Molecule;

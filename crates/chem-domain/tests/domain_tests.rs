@@ -1,4 +1,4 @@
-use chem_domain::{Molecule, MolecularProperty};
+use chem_domain::{Molecule, MolecularProperty, MoleculeFamily, FamilyProperty};
 use serde_json::json;
 
 #[test]
@@ -32,9 +32,37 @@ fn test_molecular_property_list_inequality_value() {
 
 #[test]
 fn test_molecular_property_list_inequality_metadata() {
-	// Different metadata should not compare equal
 	let mol = Molecule::new_molecule_with_smiles("CCO").unwrap();
 	let p1 = MolecularProperty::new(&mol, "prop", 1, None, false, json!({"a": 1}));
 	let p2 = MolecularProperty::new(&mol, "prop", 1, None, false, json!({"a": 2}));
 	assert!(!p1.compare(&p2));
+}
+
+#[test]
+fn test_family_property_equality() {
+    let mol = Molecule::new_molecule_with_smiles("CCO").unwrap();
+    let provenance = json!({"source": "test"});
+    let fam = MoleculeFamily::new(vec![mol.clone()], provenance.clone()).unwrap();
+    let p1 = FamilyProperty::new(&fam, "prop", 1, None, true, provenance.clone());
+    let p2 = FamilyProperty::new(&fam, "prop", 1, None, true, provenance.clone());
+    assert!(p1.compare(&p2));
+}
+
+#[test]
+fn test_family_property_inequality_value() {
+    let mol = Molecule::new_molecule_with_smiles("CCO").unwrap();
+    let provenance = json!({"source": "test"});
+    let fam = MoleculeFamily::new(vec![mol.clone()], provenance.clone()).unwrap();
+    let p1 = FamilyProperty::new(&fam, "prop", 1, None, false, provenance.clone());
+    let p2 = FamilyProperty::new(&fam, "prop", 2, None, false, provenance.clone());
+    assert!(!p1.compare(&p2));
+}
+
+#[test]
+fn test_family_property_inequality_metadata() {
+    let mol = Molecule::new_molecule_with_smiles("CCO").unwrap();
+    let fam = MoleculeFamily::new(vec![mol.clone()], json!({"a": 1})).unwrap();
+    let p1 = FamilyProperty::new(&fam, "prop", 1, None, false, json!({"a": 1}));
+    let p2 = FamilyProperty::new(&fam, "prop", 1, None, false, json!({"a": 2}));
+    assert!(!p1.compare(&p2));
 }

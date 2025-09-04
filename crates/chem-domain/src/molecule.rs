@@ -2,6 +2,7 @@ use chemengine::ChemEngine;
 use serde::{Deserialize, Serialize};
 
 use crate::DomainError;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Molecule {
@@ -25,8 +26,6 @@ impl Molecule {
             metadata,
         })
     }
-
-    // Este es el único constructor público
     pub fn new_molecule_with_smiles(smiles: &str) -> Result<Self, DomainError> {
         let engine = ChemEngine::init()?;
         let chem_molecule = engine.get_molecule(smiles)?;
@@ -37,10 +36,14 @@ impl Molecule {
             serde_json::json!("create rdkit molecule from smiles"),
         )
     }
-
-    // Métodos de acceso
     pub fn smiles(&self) -> &str { &self.smiles }
     pub fn inchikey(&self) -> &str { &self.inchikey }
     pub fn inchi(&self) -> &str { &self.inchi }
     pub fn compare(&self, other: &Molecule) -> bool { self.inchikey == other.inchikey }
+}
+ 
+ impl fmt::Display for Molecule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<smile: {}, {}>", self.smiles, self.inchi)
+    }
 }
