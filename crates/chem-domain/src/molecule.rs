@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use crate::error::DomainError;
+use serde::{Deserialize, Serialize};
 
 /// INV1: inchikey único.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -16,13 +16,11 @@ impl Molecule {
         if normalized_inchikey.len() != 27 || normalized_inchikey.matches('-').count() < 2 {
             return Err(DomainError::ValidationError("Invalid InChIKey format".to_string()));
         }
-        
-        Ok(Molecule {
-            inchikey: normalized_inchikey,
-            smiles: smiles.to_string(),
-            inchi: inchi.to_string(),
-            metadata,
-        })
+
+        Ok(Molecule { inchikey: normalized_inchikey,
+                      smiles: smiles.to_string(),
+                      inchi: inchi.to_string(),
+                      metadata })
     }
     pub fn to_string(&self) -> String {
         self.inchikey.clone()

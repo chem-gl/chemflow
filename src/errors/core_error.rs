@@ -10,7 +10,6 @@ pub enum CoreError {
     Config(String),
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,7 +1,6 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
-use sha2::{Sha256, Digest};
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoleculeFamily {
@@ -14,9 +13,8 @@ pub struct MoleculeFamily {
 
 impl MoleculeFamily {
     pub fn from_iter<I>(keys: I, provenance: serde_json::Value) -> Self
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
+        where I: IntoIterator,
+              I::Item: AsRef<str>
     {
         let mut ordered: Vec<String> = keys.into_iter().map(|k| k.as_ref().to_string()).collect();
         ordered.sort();
@@ -25,13 +23,11 @@ impl MoleculeFamily {
             hasher.update(key.as_bytes());
         }
         let family_hash = format!("{:x}", hasher.finalize());
-        MoleculeFamily {
-            id: Uuid::new_v4(),
-            ordered_keys: ordered,
-            family_hash,
-            provenance,
-            frozen: true,
-        }
+        MoleculeFamily { id: Uuid::new_v4(),
+                         ordered_keys: ordered,
+                         family_hash,
+                         provenance,
+                         frozen: true }
     }
     pub fn family_hash(&self) -> &str {
         &self.family_hash

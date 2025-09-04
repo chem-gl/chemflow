@@ -1,13 +1,13 @@
+use dotenvy::dotenv;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use std::env;
-use dotenvy::dotenv;
 
 /// Inicializa Python/RDKit usando el archivo .env
 pub fn init_python() -> PyResult<()> {
     dotenv().ok();
-    let python_path = env::var("PYTHON_PATH")
-        .expect("❌ PYTHON_PATH no encontrado en .env. Ejecuta setup-python.sh primero.");
+    let python_path =
+        env::var("PYTHON_PATH").expect("❌ PYTHON_PATH no encontrado en .env. Ejecuta setup-python.sh primero.");
     env::set_var("PYTHON_SYS_EXECUTABLE", python_path);
     Ok(())
 }

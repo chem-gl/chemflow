@@ -1,6 +1,6 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
-use sha2::{Sha256, Digest};
 
 use crate::Molecule;
 
@@ -18,15 +18,14 @@ pub struct MolecularProperty {
 }
 
 impl MolecularProperty {
- pub fn new(
-        molecule: &Molecule, 
-        name: &str,
-        value: serde_json::Value,
-        units: Option<String>,
-        quality: Option<String>,
-        preferred: bool,
-        metadata: Option<serde_json::Value>,
-    ) -> Self {
+    pub fn new(molecule: &Molecule,
+               name: &str,
+               value: serde_json::Value,
+               units: Option<String>,
+               quality: Option<String>,
+               preferred: bool,
+               metadata: Option<serde_json::Value>)
+               -> Self {
         let mut hasher = Sha256::new();
         hasher.update(molecule.inchikey().as_bytes());
         hasher.update(name.as_bytes());
@@ -38,17 +37,15 @@ impl MolecularProperty {
             hasher.update(q.as_bytes());
         }
         let value_hash = format!("{:x}", hasher.finalize());
-        MolecularProperty {
-            id: Uuid::new_v4(),
-            molecule: molecule.to_string(),
-            name: name.to_string(),
-            value,
-            units,
-            quality,
-            preferred,
-            value_hash,
-            metadata,
-        }
+        MolecularProperty { id: Uuid::new_v4(),
+                            molecule: molecule.to_string(),
+                            name: name.to_string(),
+                            value,
+                            units,
+                            quality,
+                            preferred,
+                            value_hash,
+                            metadata }
     }
 
     pub fn value_hash(&self) -> &str {

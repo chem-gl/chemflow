@@ -1,5 +1,4 @@
-pub mod rdkit;
-
+pub mod core;
 
 pub struct ChemEngine;
 
@@ -12,7 +11,6 @@ impl ChemEngine {
 
     /// Calcula el peso molecular de un SMILES
     pub fn mol_weight(&self, smiles: &str) -> Result<f64, String> {
-        rdkit::mol_weight(smiles)
-            .map_err(|e| format!("Error calculando peso molecular: {:?}", e))
+        core::mol_weight(smiles).map_err(|e| format!("Error calculando peso molecular: {:?}", e))
     }
 }
