@@ -40,9 +40,9 @@ impl From<DieselError> for PersistenceError {
             DieselError::BrokenTransactionManager => Self::TransientIo("broken transaction manager".into()),
             DieselError::QueryBuilderError(e) => Self::Unknown(format!("query builder: {e}")),
             DieselError::InvalidCString(e) => Self::Unknown(format!("invalid cstring: {e}")),
-DieselError::RollbackTransaction => Self::Unknown("rollback transaction".into()),
-            DieselError::NotInTransaction => todo!(),
-            _ => todo!(),
+            DieselError::RollbackTransaction => Self::Unknown("rollback transaction".into()),
+            DieselError::NotInTransaction => Self::Unknown("not in transaction".into()),
+            other => Self::Unknown(format!("unhandled diesel error: {other:?}")),
         }
     }
 }

@@ -100,6 +100,108 @@ Estado: GATE_F3 ALCANZADO.
 
 ## 13. Resumen Ejecutivo
 
-La persistencia Postgres vía Diesel reproduce exactamente la secuencia y fingerprints del backend en memoria sin alterar contratos de dominio ni core. La fase se considera cerrada; quedan optimizaciones evolutivas (snapshots, branching, performance) para siguientes fases.
-
+`La persistencia Postgres vía Diesel reproduce exactamente la secuencia y fingerprints del backend en memoria sin alterar contratos de dominio ni core. La fase se considera cerrada; quedan optimizaciones evolutivas (snapshots, branching, performance) para siguientes fases.
+`
 Fin.
+
+## 14. Diagrama de Clases (Vista Simplificada F1–F3)
+
+```mermaid
+classDiagram
+	class FlowEngine {
+		+run(flow_id: Uuid)
+		+dispatch(step: StepDefinition)
+	}
+	class EventStore {
+		<<interface>>
+		+append(flow_id: Uuid, event: FlowEventKind) -> FlowEvent
+		+list(flow_id: Uuid) -> Vec~FlowEvent~
+	}
+	class FlowRepository {
+		<<interface>>
+		+load(flow_id: Uuid) -> FlowInstance
+	}
+	class InMemoryEventStore
+	class PgEventStore
+	class InMemoryFlowRepository
+	class PgFlowRepository
+	class FlowEvent {
+		+seq: u64
+		+kind: FlowEventKind
+	}
+	class FlowEventKind {
+		<<enum>>
+	}
+	class Artifact {
+		+hash: String
+		+kind: ArtifactKind
+	}
+	class Molecule
+	class MoleculeFamily
+	class MolecularProperty
+
+	FlowEngine --> EventStore
+	FlowEngine --> FlowRepository
+	EventStore <|.. InMemoryEventStore
+	EventStore <|.. PgEventStore
+	FlowRepository <|.. InMemoryFlowRepository
+	FlowRepository <|.. PgFlowRepository
+	FlowEvent *-- FlowEventKind
+	FlowEventKind --> Artifact
+	MoleculeFamily o-- Molecule
+	Molecule --> MolecularProperty
+```
+
+## 15. Diagrama de Flujo (Ejecución + Persistencia)
+
+```mermaid
+flowchart TD
+	A[Definición de Flow] --> B[FlowEngine.run]
+	B --> C[StepStarted]
+	C --> D[append -> PgEventStore]
+	D --> E[(event_log)]
+	E --> F[Ejecutar Step]
+	F --> G[Generar Artifacts]
+	G --> H[Deduplicar hash]
+	H --> I[(workflow_step_artifacts)]
+	F --> J[StepFinished / Failed]
+	J --> K[append -> PgEventStore]
+	K --> E
+	E --> L[Replay futuro]
+	L --> M[Reconstruir FlowInstance]
+```
+
+## 16. Ejemplo de Uso (Código Simplificado)
+
+```rust
+use chem_core::{FlowEngine, InMemoryEventStore, InMemoryFlowRepository, FlowEventKind};
+use chem_persistence::{PgEventStore, PgFlowRepository, PgPool};
+
+fn ejemplo_replay(pg_pool: PgPool, flow_id: uuid::Uuid) -> anyhow::Result<()> {
+	// 1. Ejecutar flujo con persistencia Postgres
+	let pg_store = PgEventStore::new(pg_pool.clone());
+	let pg_repo = PgFlowRepository::new(pg_pool.clone());
+	let engine = FlowEngine::new(Box::new(pg_store), Box::new(pg_repo));
+	engine.run(flow_id)?; // durante run: append de eventos StepStarted/StepFinished
+
+	// 2. Listar eventos desde Postgres
+	let pg_store2 = PgEventStore::new(pg_pool.clone());
+	let events_pg = pg_store2.list(flow_id)?;
+
+	// 3. Simular ejecución in-memory para comparar
+	let mem_store = InMemoryEventStore::default();
+	for ev in &events_pg { mem_store.append(flow_id, ev.kind.clone())?; }
+	let events_mem = mem_store.list(flow_id)?;
+
+	assert_eq!(events_pg.len(), events_mem.len());
+	for (a,b) in events_pg.iter().zip(events_mem.iter()) {
+		assert_eq!(a.kind, b.kind);
+	}
+	Ok(())
+}
+```
+
+Notas:
+- El ejemplo ilustra equivalencia de replays: eventos Postgres se reproyectan en un store in-memory y coinciden.
+- En la implementación real `FlowEngine.run` genera los eventos; aquí se asume ya existen definiciones de steps deterministas.
+

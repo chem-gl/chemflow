@@ -3,6 +3,11 @@ name = "chem-persistence"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+# Desactiva la inserción de artifacts (para aislar posibles segfaults en tests)
+no-artifact-insert = []
+
 [dependencies]
 chem-core = { path = "../chem-core" }
 chem-domain = { path = "../chem-domain" }

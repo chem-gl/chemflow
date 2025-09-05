@@ -41,7 +41,9 @@ fn engine_flow_fingerprint_pg_vs_memory() {
 
     // Postgres run (nueva secuencia desde cero con mismo flow_id)
     let cfg = DbConfig::from_env();
-    let pool = build_pool(&cfg.url, cfg.min_connections, cfg.max_connections).expect("pool");
+    eprintln!("engine_fingerprint: original cfg min={} max={} url={} (flow_id={})", cfg.min_connections, cfg.max_connections, cfg.url, flow_id);
+    // Fuerza de aislamiento: usar siempre (1,1) independientemente de config externa para detectar si el crash desaparece.
+    let pool = build_pool(&cfg.url, 1, 1).expect("pool 1x1");
     let provider = PoolProvider { pool };
     let mut pg_engine = FlowEngine::new(PgEventStore::new(provider), PgFlowRepository::new());
     let def_pg = build_flow_definition(&["seed_pg","add_pg"], vec![Box::new(Seed), Box::new(Add)]);
@@ -51,4 +53,8 @@ fn engine_flow_fingerprint_pg_vs_memory() {
     let final_fp_pg = pg_events.iter().find_map(|e| if let FlowEventKind::FlowCompleted { flow_fingerprint } = &e.kind { Some(flow_fingerprint.clone()) } else { None }).expect("pg flowcompleted");
 
     assert_eq!(final_fp_mem, final_fp_pg, "Flow fingerprint debe coincidir entre InMemory y Postgres");
+
+    // Drops explícitos para observar si el crash ocurre durante liberación de recursos.
+    drop(pg_engine); // fuerza drop antes de fin de test
+    // Nota: el pool se droppea automáticamente junto con provider (poseído por PgEventStore), pero acá ya lo liberamos.
 }

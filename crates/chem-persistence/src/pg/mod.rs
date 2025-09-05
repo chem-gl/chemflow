@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use chem_core::{EventStore, FlowEvent, FlowEventKind, FlowRepository, FlowDefinition, InMemoryFlowRepository};
+use log::{debug, error};
 
 use crate::error::PersistenceError;
 use crate::migrations::run_pending_migrations;
@@ -88,41 +89,82 @@ impl<P: ConnectionProvider> PgEventStore<P> {
 
 impl<P: ConnectionProvider> EventStore for PgEventStore<P> {
     fn append_kind(&mut self, flow_id: Uuid, kind: FlowEventKind) -> FlowEvent {
+        debug!("append_kind:start flow_id={flow_id} kind={}", kind_variant_name(&kind));
         let event_type = event_type_for(&kind);
         let payload = serialize_full_enum(&kind);
-        let mut conn = self.provider.connection().expect("conn");
+
+        // Ejecutamos (insert evento + artifacts) dentro de una sola transacción retryable.
+        // Paso 1: insertar sólo el evento (transacción mínima) para garantizar commit aunque fallen artifacts.
         let inserted: (i64, DateTime<Utc>) = with_retry(|| {
-            diesel::insert_into(event_log::table)
-                .values(NewEventRow { flow_id: &flow_id, event_type, payload: &payload })
-                .returning((event_log::seq, event_log::ts))
-                .get_result(&mut conn)
-                .map_err(PersistenceError::from)
+            let mut conn = self.provider.connection()?;
+            conn.build_transaction().read_write().run(|tx_conn| {
+                diesel::insert_into(event_log::table)
+                    .values(NewEventRow { flow_id: &flow_id, event_type, payload: &payload })
+                    .returning((event_log::seq, event_log::ts))
+                    .get_result(tx_conn)
+            }).map_err(PersistenceError::from)
         }).expect("insert event");
-        // Si es StepFinished persistimos artifacts (si existen) con deduplicación por hash.
-        if let FlowEventKind::StepFinished { outputs, .. } = &kind {
-            for h in outputs {
-                // No tenemos el payload del artifact en el evento; persistencia plena de artifacts requiere ampliación del engine.
-                // Por ahora almacenamos placeholder minimal (kind = 'unknown', payload null) si no se ha diseñado paso de artifacts.
-                // Para F3: opcional guardar sólo metadata nula.
-                let null = Value::Null;
-                let row = NewArtifactRow { artifact_hash: h, kind: "unknown", payload: &null, metadata: None, produced_in_seq: inserted.0 };
-                // Intento insert ignorando duplicados.
-                let _ = diesel::insert_into(workflow_step_artifacts::table)
-                    .values(&row)
-                    .on_conflict_do_nothing()
-                    .execute(&mut conn);
+
+        // Paso 2: insertar artifacts (best-effort) fuera de la transacción del evento.
+        #[cfg(not(feature = "no-artifact-insert"))]
+        {
+            if let FlowEventKind::StepFinished { outputs, .. } = &kind {
+                if !outputs.is_empty() {
+                    match self.provider.connection() {
+                        Ok(mut conn2) => {
+                            for h in outputs {
+                                if h.len() != 64 { debug!("skip artifact hash len!=64 hash={h}"); continue; }
+                                let null = Value::Null;
+                                let row = NewArtifactRow { artifact_hash: h, kind: "unknown", payload: &null, metadata: None, produced_in_seq: inserted.0 };
+                                if let Err(e) = diesel::insert_into(workflow_step_artifacts::table)
+                                    .values(&row)
+                                    .on_conflict_do_nothing()
+                                    .execute(&mut conn2) {
+                                    error!("artifact insert error hash={h} seq={} err={:?}", inserted.0, e);
+                                }
+                            }
+                        }
+                        Err(e) => error!("artifact connection error seq={} err={:?}", inserted.0, e),
+                    }
+                }
             }
         }
-        FlowEvent { seq: inserted.0 as u64, flow_id, kind, ts: inserted.1 }
+        #[cfg(feature = "no-artifact-insert")]
+        {
+            if let FlowEventKind::StepFinished { outputs, .. } = &kind { debug!("artifact insertion skipped by feature no-artifact-insert outputs={}", outputs.len()); }
+        }
+
+        let ev = FlowEvent { seq: inserted.0 as u64, flow_id, kind, ts: inserted.1 };
+        debug!("append_kind:done flow_id={flow_id} seq={} kind={}", ev.seq, kind_variant_name(&ev.kind));
+        ev
     }
     fn list(&self, flow_id: Uuid) -> Vec<FlowEvent> {
-    let mut conn = self.provider.connection().expect("conn");
-        let rows: Vec<EventRow> = event_log::table
+        debug!("list:start flow_id={flow_id}");
+        let mut conn = self.provider.connection().expect("conn");
+        let query = event_log::table
             .filter(event_log::flow_id.eq(flow_id))
-            .order(event_log::seq.asc())
-            .load(&mut conn)
-            .unwrap_or_default();
-    rows.into_iter().filter_map(deserialize_full_enum).collect()
+            .order(event_log::seq.asc());
+        let rows: Vec<EventRow> = match query.load(&mut conn) {
+            Ok(r) => r,
+            Err(e) => {
+                error!("list:load error flow_id={flow_id} err={:?}", e);
+                panic!("diesel load error: {e}");
+            }
+        };
+        let events: Vec<FlowEvent> = rows.into_iter().filter_map(deserialize_full_enum).collect();
+        debug!("list:done flow_id={flow_id} count={}", events.len());
+        events
+    }
+}
+
+fn kind_variant_name(kind: &FlowEventKind) -> &'static str {
+    match kind {
+        FlowEventKind::FlowInitialized { .. } => "FlowInitialized",
+        FlowEventKind::StepStarted { .. } => "StepStarted",
+        FlowEventKind::StepFinished { .. } => "StepFinished",
+        FlowEventKind::StepFailed { .. } => "StepFailed",
+        FlowEventKind::StepSignal { .. } => "StepSignal",
+        FlowEventKind::FlowCompleted { .. } => "FlowCompleted",
     }
 }
 
@@ -138,10 +180,14 @@ impl FlowRepository for PgFlowRepository {
 
 /// Construye un pool Postgres r2d2 a partir de URL.
 pub fn build_pool(database_url: &str, min_size: u32, max_size: u32) -> Result<PgPool, PersistenceError> {
+    let validated_min = if min_size == 0 { 1 } else { min_size };
+    let validated_max = if max_size == 0 { 1 } else { max_size };
+    if validated_min > validated_max { eprintln!("WARN: min_size > max_size ({} > {}), ajustando min=max", validated_min, validated_max); }
+    let final_min = validated_min.min(validated_max);
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     let pool = r2d2::Pool::builder()
-        .min_idle(Some(min_size))
-        .max_size(max_size)
+        .min_idle(Some(final_min))
+        .max_size(validated_max)
         .build(manager)
         .map_err(|e| PersistenceError::TransientIo(format!("pool build: {e}")))?;
     // Ejecutar migraciones una sola vez al construir (primer connection checkout).

@@ -8,7 +8,8 @@ use serde_json::Value;
 fn roundtrip_all_variants_enum_json_full() {
     if std::env::var("DATABASE_URL").is_err() { eprintln!("skip (no DATABASE_URL)"); return; }
     let cfg = DbConfig::from_env();
-    let pool = build_pool(&cfg.url, cfg.min_connections, cfg.max_connections).expect("pool");
+    // Fuerza 1x1 para aislar posibles issues en destrucción de múltiples conexiones
+    let pool = build_pool(&cfg.url, 1, 1).expect("pool");
     let provider = PoolProvider { pool: pool.clone() };
     let mut store = PgEventStore::new(provider);
     let flow_id = Uuid::new_v4();
@@ -31,4 +32,6 @@ fn roundtrip_all_variants_enum_json_full() {
         let jg = serde_json::to_value(&got.kind).unwrap();
         assert_eq!(je, jg, "JSON enum debe ser idéntico tras roundtrip");
     }
+    // Drop explícito antes de fin de proceso (diagnóstico segfault en teardown)
+    drop(store);
 }

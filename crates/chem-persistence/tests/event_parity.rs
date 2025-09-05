@@ -1,5 +1,6 @@
 use chem_core::{build_flow_definition, model::ExecutionContext, step, EventStore, FlowEventKind, FlowRepository, InMemoryEventStore, InMemoryFlowRepository};
-use chem_persistence::{pg::{build_pool, PgEventStore, PoolProvider, PgFlowRepository}, config::DbConfig};
+use chem_persistence::{pg::{PgEventStore, PoolProvider, PgFlowRepository}, config::DbConfig};
+mod test_support; use test_support::with_pool;
 use uuid::Uuid;
 
 // Step dummy para probar.
@@ -32,9 +33,10 @@ fn parity_inmemory_vs_pg() {
         let mem_events = mem_store.list(flow_id);
 
         // Postgres run
-        let cfg = DbConfig::from_env();
-        let pool = build_pool(&cfg.url, cfg.min_connections, cfg.max_connections).expect("pool");
-        let mut pg_store = PgEventStore::new(PoolProvider{ pool });
+    let cfg = DbConfig::from_env(); // se mantiene por si queremos comparar parámetros
+    let pool = with_pool(|p| p.clone());
+    if pool.is_none() { eprintln!("skip pg parity (sin pool global)"); return; }
+    let mut pg_store = PgEventStore::new(PoolProvider{ pool: pool.unwrap() });
         for e in &mem_events { pg_store.append_kind(flow_id, e.kind.clone()); }
         let pg_events = pg_store.list(flow_id);
 
