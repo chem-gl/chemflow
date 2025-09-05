@@ -108,7 +108,6 @@ where
         )
     }
 
-    /// Reasigna el flag `preferred`, permitiendo marcar o desmarcar como preferido
     pub fn with_preferred(&self, preferred: bool) -> Self {
         FamilyProperty::new(
             self.family,
