@@ -1695,7 +1695,7 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tokio = { version = "1.0", features = ["full"] }
-sqlx = { version = "0.7", features = ["postgres", "runtime-tokio", "uuid", "chrono", "json"] }
+// Nota: Se eliminó sqlx. Persistencia estándar ahora usa Diesel (ver crate `chem-persistence`).
 ```
 
 Ejemplo features `chem-core` (extiende lista previa añadiendo caching y branching explícito):

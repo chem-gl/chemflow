@@ -156,7 +156,9 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tokio = { version = "1.0", features = ["full"] }
-sqlx = { version = "0.7", features = ["postgres", "runtime-tokio", "uuid", "chrono", "json"] }
+diesel = { version = "2", features = ["postgres", "r2d2", "chrono", "serde_json", "uuid"] }
+diesel_migrations = { version = "2", features = ["postgres"] }
+// Nota: Se reemplazó sqlx por Diesel para alineación con Fase 3.
 ```
 
 Ejemplo features `chem-core` (extiende lista previa añadiendo caching y branching explícito):
