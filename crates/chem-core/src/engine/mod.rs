@@ -31,22 +31,25 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
     // Si no hay steps pendientes pero no está marcado completed => flujo detenido por fallo terminal.
     if step_index >= definition.len() { return Err(CoreEngineError::StepAlreadyTerminal); }
         if !matches!(instance.steps[step_index].status, StepStatus::Pending) { return Err(CoreEngineError::StepAlreadyTerminal); }
-        let step_def = &definition.steps[step_index];
-        let required = step_def.required_input_kinds();
-        let mut input_artifacts: Vec<Artifact> = Vec::new();
-        for (idx, slot) in instance.steps.iter().enumerate() {
-            if idx >= step_index { break; }
-            if !matches!(slot.status, StepStatus::FinishedOk) { continue; }
-            for h in &slot.outputs {
-                if let Some(a) = self.artifact_store.get(h) { if required.iter().any(|k| *k == a.kind) { input_artifacts.push(a.clone()); } }
+            let step_def = &definition.steps[step_index];
+            // Regla nuevo modelo: el primer step debe ser de tipo Source (no requiere input).
+            if step_index == 0 && !matches!(step_def.kind(), crate::step::StepKind::Source) {
+                return Err(CoreEngineError::MissingInputs);
             }
-        }
-        for kind in required { if !input_artifacts.iter().any(|a| &a.kind == kind) { return Err(CoreEngineError::MissingInputs); } }
+        // Modelo simplificado: un único artifact encadenado (output[0] del step anterior exitoso)
+        let input_artifact: Option<Artifact> = if step_index == 0 { None } else {
+            let prev = &instance.steps[step_index - 1];
+            if !matches!(prev.status, StepStatus::FinishedOk) { None } else {
+                prev.outputs.get(0).and_then(|h| self.artifact_store.get(h)).cloned()
+            }
+        };
+        if step_index > 0 && input_artifact.is_none() { return Err(CoreEngineError::MissingInputs); }
         self.event_store.append_kind(flow_id, FlowEventKind::StepStarted { step_index, step_id: step_def.id().to_string() });
         let params = step_def.base_params();
-        let mut input_hashes: Vec<String> = input_artifacts.iter().map(|a| a.hash.clone()).collect(); input_hashes.sort();
+    let mut input_hashes: Vec<String> = input_artifact.iter().map(|a| a.hash.clone()).collect();
+    input_hashes.sort();
         let fingerprint = compute_step_fingerprint(step_def.id(), &input_hashes, &params, &definition.definition_hash);
-        let ctx = ExecutionContext { inputs: input_artifacts.clone(), params: params.clone() };
+    let ctx = ExecutionContext { input: input_artifact.clone(), params: params.clone() };
         match step_def.run(&ctx) {
             StepRunResult::Success { mut outputs } => {
                 let mut output_hashes = Vec::new();
@@ -127,7 +130,6 @@ mod tests {
     struct SeedStep;
     impl crate::step::StepDefinition for SeedStep {
         fn id(&self) -> &str { "seed" }
-        fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
         fn base_params(&self) -> serde_json::Value { json!({"n":2}) } // Param dummy para fingerprint.
         fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
             // Datos deterministas (no tiempo / random) => reproducibilidad garantizada.
@@ -142,12 +144,11 @@ mod tests {
     struct SumStep;
     impl crate::step::StepDefinition for SumStep {
         fn id(&self) -> &str { "sum" }
-        fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
         fn base_params(&self) -> serde_json::Value { json!({}) }
         fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
             // Uso de tipado fuerte para deserializar el primer artifact.
             use crate::model::TypedArtifact;
-            let first = ctx.inputs.first().expect("seed output present");
+            let first = ctx.input.as_ref().expect("seed output present");
             let seed = TypedArtifact::<SeedOutput>::decode(first).expect("decode seed");
             let s: i64 = seed.inner.values.iter().sum();
             let out = SumOutput { sum: s, schema_version: 1 };
@@ -284,7 +285,6 @@ mod tests {
         struct SingleStep;
         impl crate::step::StepDefinition for SingleStep {
             fn id(&self) -> &str { "single" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, _ctx: &ExecutionContext) -> StepRunResult { StepRunResult::Success { outputs: vec![SingleOut { v: 42, schema_version: 1 }.into_artifact()] } }
             fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Source }
@@ -341,7 +341,6 @@ mod tests {
         struct FailStep; // siempre falla
         impl crate::step::StepDefinition for FailStep {
             fn id(&self) -> &str { "fail" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, _ctx: &ExecutionContext) -> StepRunResult { StepRunResult::Failure { error: CoreEngineError::MissingInputs } }
             fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Transform }
@@ -374,20 +373,19 @@ mod tests {
     // ----------------------------------------------------------------------------------
     #[test]
     fn invalid_input_kind() {
-        struct NeedsJson; // requiere GenericJson pero flujo tiene step fuente diferente
-        impl crate::step::StepDefinition for NeedsJson {
-            fn id(&self) -> &str { "needs" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
+        // Primer step no es Source => debe fallar por MissingInputs según nueva regla.
+        struct TransformFirst; 
+        impl crate::step::StepDefinition for TransformFirst {
+            fn id(&self) -> &str { "transform_first" }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, _ctx: &ExecutionContext) -> StepRunResult { StepRunResult::Success { outputs: vec![] } }
             fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Transform }
         }
-        // Definir sólo el step que necesita input inexistente
         let flow_id = Uuid::new_v4();
         let mut engine = FlowEngine::new(InMemoryEventStore::default(), InMemoryFlowRepository::new());
-        let definition = build_flow_definition(&["needs"], vec![Box::new(NeedsJson)]);
+        let definition = build_flow_definition(&["transform_first"], vec![Box::new(TransformFirst)]);
         let err = engine.next(flow_id, &definition).unwrap_err();
-        assert_eq!(err.to_string(), crate::errors::CoreEngineError::MissingInputs.to_string());
+        assert_eq!(err.to_string(), CoreEngineError::MissingInputs.to_string());
     }
 
     // ----------------------------------------------------------------------------------
@@ -403,7 +401,6 @@ mod tests {
         // Step base generador inicial valor 0 (sin señales)
         struct Start; impl crate::step::StepDefinition for Start {
             fn id(&self) -> &str { "sum_start" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, _ctx: &ExecutionContext) -> StepRunResult { StepRunResult::Success { outputs: vec![Acc { value:0, schema_version:1 }.into_artifact()] } }
             fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Source }
@@ -413,10 +410,9 @@ mod tests {
         macro_rules! inc_step { ($name:ident, $n:expr) => {
             struct $name; impl crate::step::StepDefinition for $name {
                 fn id(&self) -> &str { stringify!($name) }
-                fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
                 fn base_params(&self) -> serde_json::Value { json!({"inc": $n}) }
                 fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
-                    use crate::model::TypedArtifact; let first = ctx.inputs.last().unwrap();
+                    use crate::model::TypedArtifact; let first = ctx.input.as_ref().unwrap();
                     let acc = TypedArtifact::<Acc>::decode(first).unwrap();
                     let new_v = acc.inner.value + $n;
                     let artifact = Acc { value:new_v, schema_version:1 }.into_artifact();
@@ -469,7 +465,6 @@ mod tests {
         struct HelloSignalStep;
         impl crate::step::StepDefinition for HelloSignalStep {
             fn id(&self) -> &str { "hello_signal" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
                 let art = Dummy { v: 1, schema_version: 1 }.into_artifact();
@@ -542,7 +537,6 @@ mod tests {
 
         struct StepSeven; impl StepDefinition for StepSeven {
             fn id(&self) -> &str { "step_seven" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
                 StepRunResult::Success { outputs: vec![Numero { value:7, schema_version:1 }.into_artifact()] }
@@ -552,10 +546,9 @@ mod tests {
 
         struct StepReemite; impl StepDefinition for StepReemite {
             fn id(&self) -> &str { "step_reemite" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
-                let num_art = ctx.inputs.first().unwrap();
+                let num_art = ctx.input.as_ref().unwrap();
                 let n = TypedArtifact::<Numero>::decode(num_art).unwrap();
                 assert_eq!(n.inner.value, 7, "Debe recibir 7");
                 let a1 = Numero { value: n.inner.value, schema_version:1 }.into_artifact();
@@ -598,7 +591,6 @@ mod tests {
 
         struct StepSeven; impl StepDefinition for StepSeven {
             fn id(&self) -> &str { "step_seven2" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, _ctx: &ExecutionContext) -> StepRunResult { StepRunResult::Success { outputs: vec![Numero { value:7, schema_version:1 }.into_artifact()] } }
             fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Source }
@@ -606,10 +598,9 @@ mod tests {
 
         struct StepDetect; impl StepDefinition for StepDetect {
             fn id(&self) -> &str { "step_detect" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
-                let first = ctx.inputs.first().unwrap();
+                let first = ctx.input.as_ref().unwrap();
                 let num = TypedArtifact::<Numero>::decode(first).unwrap();
                 if num.inner.value == 7 {
                     let out = Numero { value: 9, schema_version:1 }.into_artifact();
@@ -623,11 +614,10 @@ mod tests {
 
         struct StepConsume; impl StepDefinition for StepConsume {
             fn id(&self) -> &str { "step_consume" }
-            fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
             fn base_params(&self) -> serde_json::Value { json!({}) }
             fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
                 // Puede haber múltiples artifacts previos (7 original + 9 transformado). Tomamos el último (más reciente).
-                let latest = ctx.inputs.last().unwrap();
+                let latest = ctx.input.as_ref().unwrap();
                 let num = TypedArtifact::<Numero>::decode(latest).unwrap();
                 assert_eq!(num.inner.value, 9, "Debe recibir 9 transformado");
                 StepRunResult::Success { outputs: vec![latest.clone()] } // re-emite artifact transformado

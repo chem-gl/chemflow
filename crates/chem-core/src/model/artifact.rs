@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Tipos neutrales de artifact. Extensible; no incluir semántica química.
+/// Tipos neutrales de artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ArtifactKind {
     /// JSON genérico sin semántica (válido para F2)
