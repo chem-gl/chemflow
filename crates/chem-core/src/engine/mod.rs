@@ -459,6 +459,39 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------------------
+    // TEST 11: Emite una señal personalizada PRINT_HELLO y el test imprime "hola" al verla.
+    // Demuestra cómo un consumidor (el test) puede reaccionar a StepSignal sin lógica en el engine.
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn signal_triggers_side_effect_print_hello() {
+        #[derive(Clone, Serialize, Deserialize)] struct Dummy { v: i32, schema_version: u32 }
+        impl ArtifactSpec for Dummy { const KIND: ArtifactKind = ArtifactKind::GenericJson; }
+        struct HelloSignalStep;
+        impl crate::step::StepDefinition for HelloSignalStep {
+            fn id(&self) -> &str { "hello_signal" }
+            fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+                let art = Dummy { v: 1, schema_version: 1 }.into_artifact();
+                StepRunResult::SuccessWithSignals { outputs: vec![art], signals: vec![StepSignal { signal: "PRINT_HELLO".to_string(), data: json!({}) }] }
+            }
+            fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Source }
+        }
+        let flow_id = Uuid::new_v4();
+        let mut engine = FlowEngine::new(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let definition = build_flow_definition(&["hello_signal"], vec![Box::new(HelloSignalStep)]);
+        engine.next(flow_id, &definition).unwrap();
+        let events = engine.event_store.list(flow_id);
+        let mut found = false;
+        for e in events {
+            if let FlowEventKind::StepSignal { signal, .. } = e.kind {
+                if signal == "PRINT_HELLO" { println!("hola"); found = true; }
+            }
+        }
+        assert!(found, "Debe haberse emitido la señal PRINT_HELLO");
+    }
+
+    // ----------------------------------------------------------------------------------
     // TEST 7: canonical_json ordering produce mismo hash para objetos con claves invertidas.
     // ----------------------------------------------------------------------------------
     #[test]
@@ -492,5 +525,124 @@ mod tests {
             assert_eq!(to_canonical_json(&v), expected_canonical, "Canonical JSON mismatch iteration {i}");
             assert_eq!(hash_value(&v), expected_hash, "Hash mismatch iteration {i}");
         }
+    }
+
+    // ----------------------------------------------------------------------------------
+    // TEST 12: Flujo de 2 steps: StepSeven produce número 7; StepReemite lo recibe (typed) y
+    // re-emite nuevamente el 7 y además un segundo artifact con mensaje "hola como estas".
+    // Verifica paso de artifacts y contenido múltiple.
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn two_step_number_and_message_flow() {
+        #[derive(Clone, Serialize, Deserialize)] struct Numero { value: i64, schema_version: u32 }
+        #[derive(Clone, Serialize, Deserialize)] struct Mensaje { msg: String, schema_version: u32 }
+        use crate::model::TypedArtifact;
+        impl ArtifactSpec for Numero { const KIND: ArtifactKind = ArtifactKind::GenericJson; }
+        impl ArtifactSpec for Mensaje { const KIND: ArtifactKind = ArtifactKind::GenericJson; }
+
+        struct StepSeven; impl StepDefinition for StepSeven {
+            fn id(&self) -> &str { "step_seven" }
+            fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+                StepRunResult::Success { outputs: vec![Numero { value:7, schema_version:1 }.into_artifact()] }
+            }
+            fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Source }
+        }
+
+        struct StepReemite; impl StepDefinition for StepReemite {
+            fn id(&self) -> &str { "step_reemite" }
+            fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
+                let num_art = ctx.inputs.first().unwrap();
+                let n = TypedArtifact::<Numero>::decode(num_art).unwrap();
+                assert_eq!(n.inner.value, 7, "Debe recibir 7");
+                let a1 = Numero { value: n.inner.value, schema_version:1 }.into_artifact();
+                let a2 = Mensaje { msg: "hola como estas".to_string(), schema_version:1 }.into_artifact();
+                StepRunResult::Success { outputs: vec![a1, a2] }
+            }
+            fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Transform }
+        }
+
+        let flow_id = Uuid::new_v4();
+        let mut engine = FlowEngine::new(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let definition = build_flow_definition(&["step_seven","step_reemite"], vec![Box::new(StepSeven), Box::new(StepReemite)]);
+        engine.next(flow_id, &definition).unwrap(); // step 0
+        engine.next(flow_id, &definition).unwrap(); // step 1
+        let events = engine.event_store.list(flow_id);
+        // localizar StepFinished del segundo step
+    let finished = events.iter().find(|e| match &e.kind { FlowEventKind::StepFinished { step_id, .. } if step_id == "step_reemite" => true, _ => false }).unwrap();
+        let output_hashes = if let FlowEventKind::StepFinished { outputs, .. } = &finished.kind { outputs.clone() } else { vec![] };
+        assert_eq!(output_hashes.len(), 2, "Debe producir dos artifacts (numero y mensaje)");
+        // decodificar ambos
+        let mut have_number7 = false; let mut have_message = false;
+        for h in output_hashes {
+            let art = engine.artifact_store.get(&h).unwrap();
+            if art.payload.get("value").and_then(|v| v.as_i64()) == Some(7) { have_number7 = true; }
+            if art.payload.get("msg").and_then(|v| v.as_str()) == Some("hola como estas") { have_message = true; }
+        }
+        assert!(have_number7 && have_message, "Deben existir el 7 y el mensaje");
+    }
+
+    // ----------------------------------------------------------------------------------
+    // TEST 13: Flujo con señal: StepSeven produce 7; StepDetect emite StepSignal HAY_UN_7 y
+    // en vez de reenviar 7 produce un 9. StepConsume recibe 9 y valida.
+    // Verifica paso de artifacts transformados y emisión de señal.
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn signal_and_transform_number_flow() {
+        #[derive(Clone, Serialize, Deserialize)] struct Numero { value: i64, schema_version: u32 }
+        use crate::model::TypedArtifact;
+        impl ArtifactSpec for Numero { const KIND: ArtifactKind = ArtifactKind::GenericJson; }
+
+        struct StepSeven; impl StepDefinition for StepSeven {
+            fn id(&self) -> &str { "step_seven2" }
+            fn required_input_kinds(&self) -> &[ArtifactKind] { &[] }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult { StepRunResult::Success { outputs: vec![Numero { value:7, schema_version:1 }.into_artifact()] } }
+            fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Source }
+        }
+
+        struct StepDetect; impl StepDefinition for StepDetect {
+            fn id(&self) -> &str { "step_detect" }
+            fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
+                let first = ctx.inputs.first().unwrap();
+                let num = TypedArtifact::<Numero>::decode(first).unwrap();
+                if num.inner.value == 7 {
+                    let out = Numero { value: 9, schema_version:1 }.into_artifact();
+                    StepRunResult::SuccessWithSignals { outputs: vec![out], signals: vec![StepSignal { signal: "HAY_UN_7".to_string(), data: json!({"original":7}) }] }
+                } else {
+                    StepRunResult::Success { outputs: vec![Numero { value: num.inner.value, schema_version:1 }.into_artifact()] }
+                }
+            }
+            fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Transform }
+        }
+
+        struct StepConsume; impl StepDefinition for StepConsume {
+            fn id(&self) -> &str { "step_consume" }
+            fn required_input_kinds(&self) -> &[ArtifactKind] { &[ArtifactKind::GenericJson] }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
+                // Puede haber múltiples artifacts previos (7 original + 9 transformado). Tomamos el último (más reciente).
+                let latest = ctx.inputs.last().unwrap();
+                let num = TypedArtifact::<Numero>::decode(latest).unwrap();
+                assert_eq!(num.inner.value, 9, "Debe recibir 9 transformado");
+                StepRunResult::Success { outputs: vec![latest.clone()] } // re-emite artifact transformado
+            }
+            fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Transform }
+        }
+        let flow_id = Uuid::new_v4();
+        let mut engine = FlowEngine::new(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let definition = build_flow_definition(&["step_seven2","step_detect","step_consume"], vec![Box::new(StepSeven), Box::new(StepDetect), Box::new(StepConsume)]);
+        engine.next(flow_id, &definition).unwrap(); // produce 7
+        engine.next(flow_id, &definition).unwrap(); // detect -> señal + 9
+        engine.next(flow_id, &definition).unwrap(); // consume 9
+        let events = engine.event_store.list(flow_id);
+        assert!(events.iter().any(|e| matches!(e.kind, FlowEventKind::StepSignal { ref signal, .. } if signal=="HAY_UN_7")), "Debe emitirse señal HAY_UN_7");
+        let last_finished = events.iter().rev().find(|e| match &e.kind { FlowEventKind::StepFinished { step_id, .. } if step_id=="step_consume" => true, _ => false }).expect("missing consume finish");
+        if let FlowEventKind::StepFinished { outputs, .. } = &last_finished.kind { assert_eq!(outputs.len(),1); }
     }
 }
