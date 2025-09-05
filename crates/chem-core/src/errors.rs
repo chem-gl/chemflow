@@ -9,5 +9,7 @@ pub enum CoreEngineError {
     #[error("invalid step index")] InvalidStepIndex,
     #[error("step already terminal")] StepAlreadyTerminal,
     #[error("missing required inputs")] MissingInputs,
+    #[error("first step must be source kind")] FirstStepMustBeSource,
+    #[error("flow has failed previously (stop-on-failure invariant)")] FlowHasFailed,
     #[error("internal: {0}")] Internal(String),
 }

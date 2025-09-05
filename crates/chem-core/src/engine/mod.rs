@@ -11,6 +11,16 @@ use crate::step::{StepStatus, StepRunResult, StepSignal};
 use crate::constants::ENGINE_VERSION;
 use crate::errors::CoreEngineError;
 
+/// Estado interno de ejecución de un step antes de serializar a eventos.
+struct ExecutionOutcome {
+    fingerprint: String,
+    output_hashes: Vec<String>,
+    signals: Vec<StepSignal>,
+    status: ExecutionStatus,
+}
+
+enum ExecutionStatus { Success, Failure(CoreEngineError) }
+
 /// Motor lineal determinista (F2). Mantiene referencias a contratos de almacenamiento.
 pub struct FlowEngine<E: EventStore, R: FlowRepository> { pub event_store: E, pub repository: R, pub artifact_store: HashMap<String, Artifact> }
 
@@ -20,77 +30,128 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
 
     /// Ejecuta el siguiente step de un flujo.
     pub fn next(&mut self, flow_id: Uuid, definition: &FlowDefinition) -> Result<(), CoreEngineError> {
+    let instance = self.load_or_init(flow_id, definition);
+        let step_index = self.validate_state(&instance, definition)?;
+        let (ctx, fingerprint, step_id) = self.prepare_context(&instance, definition, step_index)?;
+        // Emit StepStarted antes de ejecutar.
+        self.event_store.append_kind(flow_id, FlowEventKind::StepStarted { step_index, step_id: step_id.clone() });
+        let step_def = &definition.steps[step_index];
+        let outcome = self.execute_step(step_def, ctx, fingerprint.clone());
+    self.persist_events(flow_id, step_index, &step_id, &outcome);
+        // Si terminó el flow con éxito, emitir FlowCompleted con flow_fingerprint agregado.
+        if self.is_flow_completed_successfully(flow_id, definition) {
+            let flow_fingerprint = self.compute_flow_fingerprint(flow_id);
+            self.event_store.append_kind(flow_id, FlowEventKind::FlowCompleted { flow_fingerprint });
+        }
+        // refrescar instancia no necesario para F2 (stateless en llamada)
+        Ok(())
+    }
+
+    fn load_or_init(&mut self, flow_id: Uuid, definition: &FlowDefinition) -> FlowInstance {
         let events = self.event_store.list(flow_id);
         if events.is_empty() {
             self.event_store.append_kind(flow_id, FlowEventKind::FlowInitialized { definition_hash: definition.definition_hash.clone(), step_count: definition.len() });
         }
-        let events = self.event_store.list(flow_id);
-        let instance: FlowInstance = self.repository.load(flow_id, &events, definition);
-    if instance.completed { return Err(CoreEngineError::FlowCompleted); }
-    let step_index = instance.cursor;
-    // Si no hay steps pendientes pero no está marcado completed => flujo detenido por fallo terminal.
-    if step_index >= definition.len() { return Err(CoreEngineError::StepAlreadyTerminal); }
-        if !matches!(instance.steps[step_index].status, StepStatus::Pending) { return Err(CoreEngineError::StepAlreadyTerminal); }
-            let step_def = &definition.steps[step_index];
-            // Regla nuevo modelo: el primer step debe ser de tipo Source (no requiere input).
-            if step_index == 0 && !matches!(step_def.kind(), crate::step::StepKind::Source) {
-                return Err(CoreEngineError::MissingInputs);
-            }
-        // Modelo simplificado: un único artifact encadenado (output[0] del step anterior exitoso)
+        let events2 = self.event_store.list(flow_id);
+        self.repository.load(flow_id, &events2, definition)
+    }
+
+    fn validate_state(&self, instance: &FlowInstance, definition: &FlowDefinition) -> Result<usize, CoreEngineError> {
+        if instance.completed { return Err(CoreEngineError::FlowCompleted); }
+        if instance.steps.iter().any(|s| matches!(s.status, StepStatus::Failed)) { return Err(CoreEngineError::FlowHasFailed); }
+        let idx = instance.cursor;
+        if idx >= definition.len() { return Err(CoreEngineError::StepAlreadyTerminal); }
+        if !matches!(instance.steps[idx].status, StepStatus::Pending) { return Err(CoreEngineError::StepAlreadyTerminal); }
+        Ok(idx)
+    }
+
+    fn prepare_context(&self, instance: &FlowInstance, definition: &FlowDefinition, step_index: usize) -> Result<(ExecutionContext, String, String), CoreEngineError> {
+        let step_def = &definition.steps[step_index];
+        if step_index == 0 && !matches!(step_def.kind(), crate::step::StepKind::Source) { return Err(CoreEngineError::FirstStepMustBeSource); }
         let input_artifact: Option<Artifact> = if step_index == 0 { None } else {
             let prev = &instance.steps[step_index - 1];
-            if !matches!(prev.status, StepStatus::FinishedOk) { None } else {
-                prev.outputs.get(0).and_then(|h| self.artifact_store.get(h)).cloned()
-            }
+            if !matches!(prev.status, StepStatus::FinishedOk) { None } else { prev.outputs.get(0).and_then(|h| self.artifact_store.get(h)).cloned() }
         };
         if step_index > 0 && input_artifact.is_none() { return Err(CoreEngineError::MissingInputs); }
-        self.event_store.append_kind(flow_id, FlowEventKind::StepStarted { step_index, step_id: step_def.id().to_string() });
         let params = step_def.base_params();
-    let mut input_hashes: Vec<String> = input_artifact.iter().map(|a| a.hash.clone()).collect();
-    input_hashes.sort();
+        let mut input_hashes: Vec<String> = input_artifact.iter().map(|a| a.hash.clone()).collect();
+        input_hashes.sort();
         let fingerprint = compute_step_fingerprint(step_def.id(), &input_hashes, &params, &definition.definition_hash);
-    let ctx = ExecutionContext { input: input_artifact.clone(), params: params.clone() };
+        let ctx = ExecutionContext { input: input_artifact, params };
+        Ok((ctx, fingerprint, step_def.id().to_string()))
+    }
+
+    fn execute_step(&mut self, step_def: &Box<dyn crate::step::StepDefinition>, ctx: ExecutionContext, fingerprint: String) -> ExecutionOutcome {
         match step_def.run(&ctx) {
             StepRunResult::Success { mut outputs } => {
-                let mut output_hashes = Vec::new();
-                for o in outputs.iter_mut() {
-                    // (INV_CORE_5) Calcular siempre el hash canonical y validar.
-                    let payload_canonical = to_canonical_json(&o.payload);
-                    let computed = hash_str(&payload_canonical);
-                    if o.hash.is_empty() { o.hash = computed.clone(); }
-                    debug_assert_eq!(o.hash, computed, "Artifact hash debe ser hash(canonical_json(payload))");
-                    self.artifact_store.insert(o.hash.clone(), o.clone());
-                    output_hashes.push(o.hash.clone());
-                }
-                // No inspeccionamos payload (agnóstico datos). Las señales sólo provienen de SuccessWithSignals.
-                self.event_store.append_kind(flow_id, FlowEventKind::StepFinished { step_index, step_id: step_def.id().to_string(), outputs: output_hashes, fingerprint: fingerprint.clone() });
-                if step_index + 1 == definition.len() { self.event_store.append_kind(flow_id, FlowEventKind::FlowCompleted); }
-                Ok(())
+                let output_hashes = self.hash_and_store_outputs(&mut outputs);
+                ExecutionOutcome { fingerprint, output_hashes, signals: vec![], status: ExecutionStatus::Success }
             }
             StepRunResult::SuccessWithSignals { mut outputs, signals } => {
-                let mut output_hashes = Vec::new();
-                for o in outputs.iter_mut() {
-                    let payload_canonical = to_canonical_json(&o.payload);
-                    let computed = hash_str(&payload_canonical);
-                    if o.hash.is_empty() { o.hash = computed.clone(); }
-                    debug_assert_eq!(o.hash, computed, "Artifact hash debe ser hash(canonical_json(payload))");
-                    self.artifact_store.insert(o.hash.clone(), o.clone());
-                    output_hashes.push(o.hash.clone());
-                }
-                // Emite señales declaradas por el step (ya que el motor es agnóstico).
-                for StepSignal { signal, data } in signals.into_iter() {
-                    self.event_store.append_kind(
-                        flow_id,
-                        FlowEventKind::StepSignal { step_index, step_id: step_def.id().to_string(), signal, data }
-                    );
-                }
-                self.event_store.append_kind(flow_id, FlowEventKind::StepFinished { step_index, step_id: step_def.id().to_string(), outputs: output_hashes, fingerprint: fingerprint.clone() });
-                if step_index + 1 == definition.len() { self.event_store.append_kind(flow_id, FlowEventKind::FlowCompleted); }
-                Ok(())
+                let output_hashes = self.hash_and_store_outputs(&mut outputs);
+                ExecutionOutcome { fingerprint, output_hashes, signals, status: ExecutionStatus::Success }
             }
-            StepRunResult::Failure { error } => { self.event_store.append_kind(flow_id, FlowEventKind::StepFailed { step_index, step_id: step_def.id().to_string(), error, fingerprint }); Ok(()) }
+            StepRunResult::Failure { error } => ExecutionOutcome { fingerprint, output_hashes: vec![], signals: vec![], status: ExecutionStatus::Failure(error) }
         }
     }
+
+    fn persist_events(&mut self, flow_id: Uuid, step_index: usize, step_id: &str, outcome: &ExecutionOutcome) {
+    // Emitir señales sólo en éxito.
+        if matches!(outcome.status, ExecutionStatus::Success) {
+            for StepSignal { signal, data } in outcome.signals.iter().cloned() {
+                self.event_store.append_kind(flow_id, FlowEventKind::StepSignal { step_index, step_id: step_id.to_string(), signal, data });
+            }
+        }
+        match &outcome.status {
+            ExecutionStatus::Success => {
+                self.event_store.append_kind(flow_id, FlowEventKind::StepFinished { step_index, step_id: step_id.to_string(), outputs: outcome.output_hashes.clone(), fingerprint: outcome.fingerprint.clone() });
+            }
+            ExecutionStatus::Failure(err) => {
+                self.event_store.append_kind(flow_id, FlowEventKind::StepFailed { step_index, step_id: step_id.to_string(), error: err.clone(), fingerprint: outcome.fingerprint.clone() });
+            }
+        }
+        // FlowCompleted emitido por caller luego de verificar todos FinishedOk.
+    }
+
+    fn is_flow_completed_successfully(&self, flow_id: Uuid, definition: &FlowDefinition) -> bool {
+        let events = self.event_store.list(flow_id);
+        // Contar StepFinished y verificar que son == steps.len() y no hay StepFailed; y aún no existe FlowCompleted.
+        let mut finished = 0usize; let mut failed = false; let mut completed = false;
+        for e in &events {
+            match &e.kind {
+                FlowEventKind::StepFinished { .. } => finished += 1,
+                FlowEventKind::StepFailed { .. } => failed = true,
+                FlowEventKind::FlowCompleted { .. } => completed = true,
+                _ => {}
+            }
+        }
+        !completed && !failed && finished == definition.len()
+    }
+
+    fn compute_flow_fingerprint(&self, flow_id: Uuid) -> String {
+        let events = self.event_store.list(flow_id);
+        let mut fps: Vec<String> = events.iter().filter_map(|e| match &e.kind { FlowEventKind::StepFinished { fingerprint, .. } => Some(fingerprint.clone()), _ => None }).collect();
+        fps.sort();
+        let v = serde_json::Value::Array(fps.into_iter().map(serde_json::Value::String).collect());
+        let canonical = to_canonical_json(&v);
+        hash_str(&canonical)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_compute_flow_fingerprint(&self, flow_id: Uuid) -> String { self.compute_flow_fingerprint(flow_id) }
+    fn hash_and_store_outputs(&mut self, outputs: &mut [Artifact]) -> Vec<String> {
+        let mut output_hashes = Vec::new();
+        for o in outputs.iter_mut() {
+            let payload_canonical = to_canonical_json(&o.payload);
+            let computed = hash_str(&payload_canonical);
+            if o.hash.is_empty() { o.hash = computed.clone(); }
+            debug_assert_eq!(o.hash, computed, "Artifact hash debe ser hash(canonical_json(payload))");
+            self.artifact_store.insert(o.hash.clone(), o.clone());
+            output_hashes.push(o.hash.clone());
+        }
+        output_hashes
+    }
+    pub fn get_artifact(&self, hash: &str) -> Option<&Artifact> { self.artifact_store.get(hash) }
 }
 
 /// Helper recomendado por especificación (Sección 17) para encapsular cálculo fingerprint.
@@ -108,12 +169,6 @@ mod tests {
     use serde_json::json;
     use crate::model::{ArtifactSpec, ArtifactKind};
     use crate::{InMemoryEventStore, InMemoryFlowRepository, build_flow_definition, StepRunResult, step::StepDefinition};
-
-    // ----------------------------------------------------------------------------------
-    // DEFINICIÓN DE ARTIFACTOS TIPADOS (sin semántica de dominio, sólo datos genéricos)
-    // ----------------------------------------------------------------------------------
-    /// Artifact producido por el step inicial (Source). Contiene un vector de enteros
-    /// y un campo de versionado de esquema para soportar evoluciones futuras.
     #[derive(Clone, Serialize, Deserialize)]
     struct SeedOutput { values: Vec<i64>, schema_version: u32 }
     impl ArtifactSpec for SeedOutput { const KIND: ArtifactKind = ArtifactKind::GenericJson; }
@@ -190,14 +245,14 @@ mod tests {
         let events_run2 = engine2.event_store.list(flow_id);
 
         // Normalizar eventos a su nombre de variante (ignoramos timestamps y hashes concretos).
-        fn simplify(ev: &crate::event::FlowEventKind) -> String {
+    fn simplify(ev: &crate::event::FlowEventKind) -> String {
             match ev {
                 crate::event::FlowEventKind::FlowInitialized {..} => "FlowInitialized",
                 crate::event::FlowEventKind::StepStarted {..} => "StepStarted",
                 crate::event::FlowEventKind::StepFinished {..} => "StepFinished",
                 crate::event::FlowEventKind::StepFailed {..} => "StepFailed",
                 crate::event::FlowEventKind::StepSignal {..} => "StepSignal",
-                crate::event::FlowEventKind::FlowCompleted => "FlowCompleted"
+        crate::event::FlowEventKind::FlowCompleted { .. } => "FlowCompleted"
             }.to_string()
         }
         let seq1: Vec<String> = events_run1.iter().map(|e| simplify(&e.kind)).collect();
@@ -238,7 +293,7 @@ mod tests {
             crate::event::FlowEventKind::StepFinished { .. } => "F",
             crate::event::FlowEventKind::StepFailed { .. } => "X",
             crate::event::FlowEventKind::StepSignal { .. } => "G", // generic signal
-            crate::event::FlowEventKind::FlowCompleted => "C",
+            crate::event::FlowEventKind::FlowCompleted { .. } => "C",
         }).collect::<Vec<_>>();
         let s1 = seq(&e1.event_store.list(flow_id));
         let s2 = seq(&e2.event_store.list(flow_id));
@@ -294,7 +349,7 @@ mod tests {
         let definition = build_flow_definition(&["single"], vec![Box::new(SingleStep)]);
         engine.next(flow_id, &definition).unwrap();
         let events = engine.event_store.list(flow_id);
-    let variants: Vec<_> = events.iter().map(|e| match &e.kind { crate::event::FlowEventKind::FlowInitialized{..}=>"I", crate::event::FlowEventKind::StepStarted{..}=>"S", crate::event::FlowEventKind::StepFinished{..}=>"F", crate::event::FlowEventKind::FlowCompleted=>"C", crate::event::FlowEventKind::StepFailed{..}=>"X", crate::event::FlowEventKind::StepSignal{..}=>"G" }).collect();
+    let variants: Vec<_> = events.iter().map(|e| match &e.kind { crate::event::FlowEventKind::FlowInitialized{..}=>"I", crate::event::FlowEventKind::StepStarted{..}=>"S", crate::event::FlowEventKind::StepFinished{..}=>"F", crate::event::FlowEventKind::FlowCompleted{..}=>"C", crate::event::FlowEventKind::StepFailed{..}=>"X", crate::event::FlowEventKind::StepSignal{..}=>"G" }).collect();
         assert_eq!(variants, vec!["I","S","F","C"], "Secuencia esperada para un sólo step");
     }
 
@@ -337,7 +392,7 @@ mod tests {
     // TEST 5: Fallo no avanza cursor (step 2 falla y no se re-ejecuta).
     // ----------------------------------------------------------------------------------
     #[test]
-    fn failure_does_not_advance() {
+    fn failure_stops_following_steps() {
         struct FailStep; // siempre falla
         impl crate::step::StepDefinition for FailStep {
             fn id(&self) -> &str { "fail" }
@@ -350,9 +405,9 @@ mod tests {
         let definition = build_flow_definition(&["seed","fail"], vec![Box::new(SeedStep), Box::new(FailStep)]);
         engine.next(flow_id, &definition).unwrap(); // seed ok
         engine.next(flow_id, &definition).unwrap(); // fail step executes
-        // intentar de nuevo debe dar StepAlreadyTerminal (slot en Failed)
-        let err = engine.next(flow_id, &definition).unwrap_err();
-        assert_eq!(err.to_string(), crate::errors::CoreEngineError::StepAlreadyTerminal.to_string());
+    // intentar de nuevo debe dar FlowHasFailed (stop-on-failure)
+    let err = engine.next(flow_id, &definition).unwrap_err();
+    assert_eq!(err.to_string(), crate::errors::CoreEngineError::FlowHasFailed.to_string());
     }
 
     // ----------------------------------------------------------------------------------
@@ -372,7 +427,7 @@ mod tests {
     // TEST 6: Input inválido (step requiere kind que no existe) => MissingInputs.
     // ----------------------------------------------------------------------------------
     #[test]
-    fn invalid_input_kind() {
+    fn first_step_must_be_source() {
         // Primer step no es Source => debe fallar por MissingInputs según nueva regla.
         struct TransformFirst; 
         impl crate::step::StepDefinition for TransformFirst {
@@ -384,8 +439,8 @@ mod tests {
         let flow_id = Uuid::new_v4();
         let mut engine = FlowEngine::new(InMemoryEventStore::default(), InMemoryFlowRepository::new());
         let definition = build_flow_definition(&["transform_first"], vec![Box::new(TransformFirst)]);
-        let err = engine.next(flow_id, &definition).unwrap_err();
-        assert_eq!(err.to_string(), CoreEngineError::MissingInputs.to_string());
+    let err = engine.next(flow_id, &definition).unwrap_err();
+    assert_eq!(err.to_string(), CoreEngineError::FirstStepMustBeSource.to_string());
     }
 
     // ----------------------------------------------------------------------------------
@@ -634,5 +689,40 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e.kind, FlowEventKind::StepSignal { ref signal, .. } if signal=="HAY_UN_7")), "Debe emitirse señal HAY_UN_7");
         let last_finished = events.iter().rev().find(|e| match &e.kind { FlowEventKind::StepFinished { step_id, .. } if step_id=="step_consume" => true, _ => false }).expect("missing consume finish");
         if let FlowEventKind::StepFinished { outputs, .. } = &last_finished.kind { assert_eq!(outputs.len(),1); }
+    }
+
+    // ----------------------------------------------------------------------------------
+    // TEST 14: definition_hash depende sólo de ids (orden) – snapshot simple.
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn definition_hash_only_ids() {
+    struct A; impl StepDefinition for A { fn id(&self)->&str{"a"} fn base_params(&self)->serde_json::Value{json!({"x":1})} fn run(&self,_:&ExecutionContext)->StepRunResult{StepRunResult::Success{outputs:vec![]}} fn kind(&self)->crate::step::StepKind{crate::step::StepKind::Source}}
+    struct B; impl StepDefinition for B { fn id(&self)->&str{"b"} fn base_params(&self)->serde_json::Value{json!({"y":2})} fn run(&self,_:&ExecutionContext)->StepRunResult{StepRunResult::Success{outputs:vec![]}} fn kind(&self)->crate::step::StepKind{crate::step::StepKind::Transform}}
+        let def1 = build_flow_definition(&["a","b"], vec![Box::new(A), Box::new(B)]);
+        // Cambiamos parámetros internos pero mismo orden de ids -> mismo hash.
+    struct A2; impl StepDefinition for A2 { fn id(&self)->&str{"a"} fn base_params(&self)->serde_json::Value{json!({"x":999})} fn run(&self,_:&ExecutionContext)->StepRunResult{StepRunResult::Success{outputs:vec![]}} fn kind(&self)->crate::step::StepKind{crate::step::StepKind::Source}}
+    struct B2; impl StepDefinition for B2 { fn id(&self)->&str{"b"} fn base_params(&self)->serde_json::Value{json!({"y":0})} fn run(&self,_:&ExecutionContext)->StepRunResult{StepRunResult::Success{outputs:vec![]}} fn kind(&self)->crate::step::StepKind{crate::step::StepKind::Transform}}
+        let def2 = build_flow_definition(&["a","b"], vec![Box::new(A2), Box::new(B2)]);
+        assert_eq!(def1.definition_hash, def2.definition_hash, "definition_hash debe depender solo de ids");
+        // Cambiar orden ids cambia hash.
+        let def_swapped = build_flow_definition(&["b","a"], vec![Box::new(B2), Box::new(A2)]);
+        assert_ne!(def1.definition_hash, def_swapped.definition_hash, "Cambiar orden ids debe cambiar hash");
+    }
+
+    // ----------------------------------------------------------------------------------
+    // TEST 15: Flow fingerprint agregado determinista entre runs idénticos.
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn aggregated_flow_fingerprint_deterministic() {
+        let flow_id = Uuid::new_v4();
+        let mut e1 = FlowEngine::new(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let def = build_flow_definition(&["seed","sum"], vec![Box::new(SeedStep), Box::new(SumStep)]);
+        e1.next(flow_id, &def).unwrap(); e1.next(flow_id, &def).unwrap();
+        let fp1 = e1.test_compute_flow_fingerprint(flow_id);
+        let mut e2 = FlowEngine::new(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let def2 = build_flow_definition(&["seed","sum"], vec![Box::new(SeedStep), Box::new(SumStep)]);
+        e2.next(flow_id, &def2).unwrap(); e2.next(flow_id, &def2).unwrap();
+        let fp2 = e2.test_compute_flow_fingerprint(flow_id);
+        assert_eq!(fp1, fp2, "Flow fingerprint agregado debe ser estable");
     }
 }

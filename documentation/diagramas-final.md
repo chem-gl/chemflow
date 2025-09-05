@@ -22,7 +22,8 @@
 13. Índices y Consideraciones de Rendimiento
 14. Recuperación (Recovery) y Consistencia
 15. Creación de un Step Completo (Ejemplo Canon)
-16. Providers / Adaptadores y Desacoplamiento
+16. Providers / Adaptadores y Desacoplamientolas estructuras de datos principales para representar las cosas quimicas en el archivo src/main de Rust llamare a estas estructuras Domain Molecule, MoleculeFamily, MolecularProperty para representar las cosas quimicas en el dominio de la aplicacion el dominio se creara en crates/chem-domain
+Molecule, Mo
 17. Definiciones Formales (Tablas Resumen)
 18. Anti‑Patrones y Riesgos
 19. Ejemplo End‑To‑End (Resumen)

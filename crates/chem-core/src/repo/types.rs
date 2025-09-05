@@ -19,6 +19,7 @@ pub struct StepSlot {
     pub outputs: Vec<String>, // almacenar solo hashes aquí (Artifacts completos podrían gestionarse aparte)
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+    pub attempts: u32, // (Futuro retries) inicial primera ejecución =1
 }
 
 /// Trait para reconstruir (`replay`) estado de un flow a partir de eventos.
@@ -49,21 +50,22 @@ impl FlowRepository for InMemoryFlowRepository {
             outputs: vec![],
             started_at: None,
             finished_at: None,
+            attempts: 0,
         }).collect();
         let mut completed = false;
         for ev in events {
             match &ev.kind {
                 FlowEventKind::FlowInitialized { .. } => {},
                 FlowEventKind::StepStarted { step_index, .. } => {
-                                if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::Running; slot.started_at = Some(ev.ts); }
-                            }
+                    if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::Running; slot.started_at = Some(ev.ts); slot.attempts += 1; }
+                }
                 FlowEventKind::StepFinished { step_index, fingerprint, outputs, .. } => {
                                 if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::FinishedOk; slot.fingerprint = Some(fingerprint.clone()); slot.outputs = outputs.clone(); slot.finished_at = Some(ev.ts); }
                             }
                 FlowEventKind::StepFailed { step_index, fingerprint, .. } => {
                                 if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::Failed; slot.fingerprint = Some(fingerprint.clone()); slot.finished_at = Some(ev.ts); }
                             }
-                FlowEventKind::FlowCompleted => completed = true,
+                FlowEventKind::FlowCompleted { .. } => completed = true,
                 FlowEventKind::StepSignal { .. } => { /* no-op: señales no alteran estado central */ },
             }
         }
