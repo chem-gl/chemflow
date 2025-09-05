@@ -13,14 +13,14 @@ pub enum ArtifactKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artifact {
     pub kind: ArtifactKind,
-    pub hash: String,               // hash canonical del payload
-    pub payload: Value,             // contenido neutro
-    pub metadata: Option<Value>,    // opcional; no entra al hash del payload (solo payload)
+    pub hash: String,               // hash canonical del payload (asignado por engine)
+    pub payload: Value,             // contenido neutro JSON
+    pub metadata: Option<Value>,    // información auxiliar (no entra al hash)
 }
 
 impl Artifact {
-    /// Constructor helper – no calcula hash (lo hará FlowEngine en el futuro).
-    pub fn new_unhashed(kind: ArtifactKind, payload: Value, metadata: Option<Value>) -> Self {
+    /// Constructor interno; preferir crear artifacts a través de `ArtifactSpec::into_artifact`.
+    pub(crate) fn new_unhashed(kind: ArtifactKind, payload: Value, metadata: Option<Value>) -> Self {
         Self { kind, hash: String::new(), payload, metadata }
     }
 }

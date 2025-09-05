@@ -11,6 +11,8 @@ pub enum FlowEventKind {
     StepStarted { step_index: usize, step_id: String },
     StepFinished { step_index: usize, step_id: String, outputs: Vec<String>, fingerprint: String },
     StepFailed { step_index: usize, step_id: String, error: CoreEngineError, fingerprint: String },
+    /// Señal generada por el motor/step para comunicar un hito ligero (no altera estado principal).
+    StepSignal { step_index: usize, step_id: String, signal: String, data: serde_json::Value },
     FlowCompleted,
 }
 

@@ -55,15 +55,16 @@ impl FlowRepository for InMemoryFlowRepository {
             match &ev.kind {
                 FlowEventKind::FlowInitialized { .. } => {},
                 FlowEventKind::StepStarted { step_index, .. } => {
-                    if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::Running; slot.started_at = Some(ev.ts); }
-                }
+                                if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::Running; slot.started_at = Some(ev.ts); }
+                            }
                 FlowEventKind::StepFinished { step_index, fingerprint, outputs, .. } => {
-                    if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::FinishedOk; slot.fingerprint = Some(fingerprint.clone()); slot.outputs = outputs.clone(); slot.finished_at = Some(ev.ts); }
-                }
+                                if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::FinishedOk; slot.fingerprint = Some(fingerprint.clone()); slot.outputs = outputs.clone(); slot.finished_at = Some(ev.ts); }
+                            }
                 FlowEventKind::StepFailed { step_index, fingerprint, .. } => {
-                    if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::Failed; slot.fingerprint = Some(fingerprint.clone()); slot.finished_at = Some(ev.ts); }
-                }
+                                if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::Failed; slot.fingerprint = Some(fingerprint.clone()); slot.finished_at = Some(ev.ts); }
+                            }
                 FlowEventKind::FlowCompleted => completed = true,
+                FlowEventKind::StepSignal { .. } => { /* no-op: señales no alteran estado central */ },
             }
         }
         let cursor = steps.iter().position(|s| matches!(s.status, StepStatus::Pending)).unwrap_or(steps.len());
@@ -79,3 +80,4 @@ pub fn build_flow_definition(step_ids: &[&str], steps: Vec<Box<dyn StepDefinitio
     let definition_hash = hash_str(&canonical);
     FlowDefinition::new(steps, definition_hash)
 }
+

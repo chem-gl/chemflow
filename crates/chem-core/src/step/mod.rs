@@ -6,4 +6,4 @@ mod run_result;
 
 pub use definition::{StepDefinition, StepKind};
 pub use status::StepStatus;
-pub use run_result::StepRunResult;
+pub use run_result::{StepRunResult, StepSignal};

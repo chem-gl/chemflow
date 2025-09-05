@@ -4,7 +4,7 @@ Versión: 0.2 (Especificación Detallada)
 
 ---
 
-## 1. Objetivo
+### 1. Objetivo
 
 Implementar un motor mínimo (chem-core) capaz de ejecutar un flujo lineal de Steps de manera 100% determinista, generando:
 
@@ -12,7 +12,7 @@ Implementar un motor mínimo (chem-core) capaz de ejecutar un flujo lineal de St
 2. Fingerprints reproducibles de cada Step y del conjunto (flow lineage comprobable).
 3. Ausencia total de semántica química (solo tipos neutrales: ArtifactKind, JSON, hashes, UUIDs).
 
-## 2. Alcance (IN) / Exclusiones (OUT)
+### 2. Alcance (IN) / Exclusiones (OUT)
 
 IN:
 - Ejecución lineal (sin branching, retries ni skips aún).
@@ -27,7 +27,7 @@ OUT (diferido a F3+):
 - Event sourcing avanzado (compaction, snapshots, índices secundarios).
 - Métricas, tracing, auditoría extendida.
 
-## 3. Glosario Core Mínimo
+### 3. Glosario Core Mínimo
 - FlowDefinition: Lista ordenada e inmutable de StepDefinition.
 - StepDefinition: Contrato para ejecutar una unidad pura determinista (lado adaptadores proveerán implementaciones concretas en futuro).
 - StepSlot: Estado runtime asociado a una definición durante una ejecución (fingerprint, status, outputs).
@@ -35,7 +35,7 @@ OUT (diferido a F3+):
 - Artifact: Unidad de resultado/entrada neutral (hash + kind + payload JSON + metadata opcional).
 - Event: Registro inmutable que narra cambios (StepStarted, StepFinished, etc.).
 
-## 4. Traits / Contratos
+### 4. Traits / Contratos
 
 ```rust
 pub trait StepDefinition {
@@ -57,7 +57,7 @@ pub trait FlowRepository { // reconstruye instancia a partir de eventos
 }
 ```
 
-## 5. Modelos de Datos (Structs Propuestos)
+### 5. Modelos de Datos (Structs Propuestos)
 
 ```rust
 pub struct FlowDefinition { pub steps: Vec<Box<dyn StepDefinition>> }
@@ -98,7 +98,147 @@ pub enum StepRunResult { Success { outputs: Vec<Artifact> }, Failure { error: St
 
 Nota: `ArtifactKind` se define como enum neutral ampliable (p.ej. GenericJson, DomainAdapterOutput, AggregationOutput...). Para F2 basta `GenericJson`.
 
-## 6. Ciclo de Vida de un Step
+### 5.1 Diagrama de Clases Implementado (Estado Real F2)
+
+El siguiente diagrama refleja la implementación actual en el crate `chem-core` tras completar F2. Se incluyen traits, structs concretos y relaciones clave. (Los adapters de dominio NO aparecen porque F2 es estrictamente neutral.)
+
+```mermaid
+classDiagram
+FlowEngine --> FlowDefinition : usa definicion inmutable
+FlowEngine --> EventStore : persiste eventos
+FlowEngine --> FlowRepository : replay estado
+FlowEngine --> Artifact : produce / consume
+FlowDefinition --> StepDefinition : contiene steps
+FlowInstance --> StepSlot : slots runtime
+StepSlot --> Artifact : outputs
+StepDefinition --> ExecutionContext : run con
+ExecutionContext --> Artifact : inputs
+InMemoryEventStore ..|> EventStore : impl
+InMemoryFlowRepository ..|> FlowRepository : impl
+EventStore --> FlowEvent : almacena
+FlowEvent --> FlowEventKind : payload
+FlowEngine --> FlowEvent : emite
+FlowEngine --> StepFingerprintInput : construye fingerprint
+FlowEngine --> Hashing : hashing determinista
+FlowEngine --> Constants : version engine
+FlowEngine --> Errors : errores dominio core
+
+class FlowEngine { +next(); +artifact_store }
+class FlowDefinition { +steps; +definition_hash }
+class FlowInstance { +id; +steps; +cursor; +completed }
+class StepSlot { +step_id; +status; +fingerprint; +outputs }
+class StepDefinition { <<trait>> +id(); +required_input_kinds(); +base_params(); +run(); +kind() }
+class ExecutionContext { +inputs; +params }
+class Artifact { +kind; +hash; +payload; +metadata }
+class ArtifactKind { <<enum>> GenericJson }
+class StepStatus { <<enum>> Pending; Running; FinishedOk; Failed }
+class StepRunResult { <<enum>> Success; Failure }
+class FlowEventKind { <<enum>> FlowInitialized; StepStarted; StepFinished; StepFailed; FlowCompleted }
+class FlowEvent { +seq; +flow_id; +ts; +kind }
+class EventStore { <<trait>> }
+class InMemoryEventStore
+class FlowRepository { <<trait>> }
+class InMemoryFlowRepository
+class StepFingerprintInput
+class Hashing
+class Constants { ENGINE_VERSION }
+class Errors { CoreEngineError }
+```
+
+#### 5.1.1 Diagrama de Flujo de Ejecución (FlowEngine::next)
+
+El siguiente flujo muestra los pasos deterministas al ejecutar un step (alineado con la sección del algoritmo y las invariantes INV_CORE_1..5):
+
+```mermaid
+flowchart LR
+	A[Invocar next -flow_id- ] --> B{Hay eventos?}
+	B -- No --> B0[Emit FlowInitialized]
+	B0 --> C[Replay eventos -> FlowInstance]
+	B -- Sí --> C[Replay eventos -> FlowInstance]
+	C --> D{FlowInstance.completed?}
+	D -- Sí --> Z1[Error FlowCompleted]
+	D -- No --> E{cursor < steps.len ?}
+	E -- No --> Z2[Error StepAlreadyTerminal]
+	E -- Sí --> F[Obtener StepDefinition actual]
+	F --> G{Status Pending?}
+	G -- No --> Z3[Error StepAlreadyTerminal]
+	G -- Sí --> H[Recolectar inputs requeridos]
+	H --> H1{Faltan kinds?}
+	H1 -- Sí --> Z4[Error MissingInputs]
+	H1 -- No --> I[Calcular fingerprint sorted input_hashes + params + def_hash + engine_version]
+	I --> J[Emit StepStarted]
+	J --> K[Ejecutar step.run ctx ]
+	K --> L{Resultado}
+	L -- Failure --> F1[Emit StepFailed]
+	F1 --> R[No avanza cursor]
+	L -- Success --> M[Calcular hash canonical de cada output]
+	M --> N[Persistir artifacts en memoria]
+	N --> O[Emit StepFinished]
+	O --> P{Último step?}
+	P -- Sí --> Q[Emit FlowCompleted]
+	P -- No --> R[Avanza cursor]
+	R --> S[Fin next  ]
+```
+
+### 5.2 Descripción de Componentes (Responsabilidad / Colaboraciones / Invariantes)
+
+| Componente | Tipo | Responsabilidad Principal | Entrada / Salida | Invariantes Relevantes |
+|------------|------|---------------------------|------------------|------------------------|
+| FlowEngine | Struct | Orquestar ejecución lineal determinista, emitir eventos, calcular fingerprints | Inputs: (flow_id, FlowDefinition, estado previo via eventos); Output: nuevos eventos + actualización de artifact_store | Respeta orden secuencial; no re-ejecuta steps terminales (INV_CORE_1); exige inputs requeridos (INV_CORE_2); asegura hash artifact (INV_CORE_5) |
+| FlowDefinition | Struct | Lista inmutable de steps + hash determinista de definición | Steps y definition_hash | definition_hash = hash(orden exacto de step_id) |
+| FlowInstance | Struct (derivado por replay) | Representación reconstruida del estado (cursor, statuses, fingerprints, outputs) | Lista de FlowEvent | Cursor apunta al primer Pending o = len() |
+| StepSlot | Struct | Snapshot de estado/outputs/fingerprint de un step | Eventos StepStarted/Finished/Failed | status evoluciona siguiendo la máquina de estados permitida |
+| StepDefinition | Trait | Contrato puro de ejecución determinista | ExecutionContext -> StepRunResult | Debe ser pura w.r.t inputs + params; no I/O side effects visibles al core |
+| ExecutionContext | Struct | Paquete inmutable de insumos (inputs + params canónicos) | Construido por engine antes de run | Inputs coinciden con required_input_kinds del Step |
+| Artifact | Struct | Contenedor neutral de datos y metadata no hasheada | Step outputs -> FlowEngine | hash siempre = hash(canonical_json(payload)) (debug_assert) |
+| ArtifactKind | Enum | Taxonomía mínima neutral de tipos de artifact | N/A | Variantes sin semántica de dominio (F2: GenericJson) |
+| StepStatus | Enum | Ciclo de vida del step | Mutado vía replay | Transiciones válidas: Pending→Running→FinishedOk/Failed |
+| StepRunResult | Enum | Resultado abstracto de run() | Devuelto por StepDefinition | Una sola emisión por ejecución de Step |
+| FlowEventKind | Enum | Payload tipado de eventos mínimos F2 | Generado por engine y replay | Orden append define `seq` monotónico |
+| FlowEvent | Struct | Registro inmutable (seq, ts, kind) | Persistido en EventStore | `seq` estrictamente creciente, no se modifica |
+| EventStore | Trait | Contrato append-only para eventos | append_kind / list | No mutación de eventos pasados |
+| InMemoryEventStore | Impl | Almacenamiento volátil de eventos | HashMap(flow_id -> Vec(Event)) | seq = posición en vector |
+| FlowRepository | Trait | Replay declarativo a FlowInstance | events + definition -> FlowInstance | No agrega lógica de negocio, sólo reconstrucción |
+| InMemoryFlowRepository | Impl | Implementación mínima de replay | Itera eventos en orden | Idempotente: mismo input => mismo estado |
+| StepFingerprintInput | Struct | Modelo intermedio antes de hash del fingerprint | engine_version, step_id, input_hashes, params, definition_hash | Campos EXACTOS definen identidad determinista |
+| Hashing | Módulo | Serialización canónica + hashing blake3 | Value -> String | Orden de claves estable; arrays intactas |
+| Constants (ENGINE_VERSION) | Constante | Versionar fingerprint global | &str | Cambios de versión invalidan cache determinista |
+| CoreEngineError | Enum | Errores semánticos del motor | Distintas variantes | Mensajes estables (usados en tests) |
+| compute_step_fingerprint | Func helper | Encapsula cálculo fingerprint siguiendo spec | (step_id, sorted_input_hashes, params, def_hash) -> String | Orden input_hashes debe llegar preordenado |
+
+#### 5.3 Flujo de Colaboración Simplificado
+
+1. `FlowEngine::next` obtiene eventos previos (`EventStore::list`).
+2. `FlowRepository::load` reconstruye `FlowInstance` y apunta `cursor` al primer `Pending`.
+3. Se validan invariantes (estado terminal, índice válido, inputs requeridos disponibles).
+4. Se construye `ExecutionContext` con artifacts filtrados y params base.
+5. Se emite `StepStarted` y se calcula fingerprint vía `compute_step_fingerprint` (usa `StepFingerprintInput` + `Hashing`).
+6. Se ejecuta `StepDefinition::run` y se obtienen outputs.
+7. Para cada output se canonicaliza y hashea payload (invariante de integridad), se guarda en `artifact_store` y se emite `StepFinished` (o `StepFailed`).
+8. Si era el último step y terminó OK se emite `FlowCompleted`.
+
+#### 5.4 Mapeo de Invariantes → Código
+
+| Invariante | Código/Ubicación | Mecanismo |
+|------------|------------------|-----------|
+| INV_CORE_1 | `engine::next` (chequeo status Pending) | Error `StepAlreadyTerminal` |
+| INV_CORE_2 | `engine::next` (loop validación required_input_kinds) | Error `MissingInputs` |
+| INV_CORE_3 | Tests (`deterministic_two_step_flow`, `fingerprint_stability`, `all_step_fingerprints_equal_across_three_runs`) | Comparación de fingerprints |
+| INV_CORE_4 | Tests (`determinism_three_runs_event_sequence`) | Comparación secuencias variantes |
+| INV_CORE_5 | Debug assert en loop outputs (`debug_assert_eq!`) | Valida hash(payload) |
+| G5 (20 rep) | Test `canonical_json_repetition_20` | Hash estable |
+
+#### 5.5 Diferencias Menores vs. Diseño Propuesto Original
+
+- `StepRunResult::Failure` usa `CoreEngineError` (en spec era `String`). Se optó por error tipado para mayor robustez.
+- `FlowEventKind::StepFailed.error` mantiene tipo `CoreEngineError` (spec textual indicaba `error: String`).
+- Se añadió helper público `compute_step_fingerprint` alineado con Recomendaciones §17.
+- Artifacts almacenan `metadata: Option<Value>` (spec proponía `serde_json::Value` puro) para evitar JSON vacío cuando no se usa.
+
+Ninguno de estos cambios rompe los objetivos de F2: determinismo, neutralidad y reproducibilidad.
+
+
+### 6. Ciclo de Vida de un Step
 Estados válidos (transiciones):
 ```
 Pending -> Running -> FinishedOk
@@ -109,7 +249,7 @@ Reglas:
 - Los Steps puede no requerir inputs (source).
 - Los Steps deben ser parametrizados (base_params + overrides opcionales).
 - El ultimo step que termina `FinishedOk` marca `FlowInstance.completed = true`.
-## 7. Eventos (Tipados Mínimos)
+### 7. Eventos (Tipados Mínimos)
 
 | Evento | Momento | Payload Campos | Contribuye a determinismo |
 | ------ | ------- | -------------- | ------------------------- |
@@ -133,7 +273,7 @@ pub struct FlowEvent { pub seq: u64, pub flow_id: Uuid, pub kind: FlowEventKind,
 ```
 `seq` en el impl in-memory se deriva de longitud del vector (0..n). Determinismo exige misma inserción en mismo orden (garantizado si el camino de ejecución es puro y sin branching).
 
-## 8. Algoritmo `FlowEngine::next(flow_id)` (Pseudocódigo)
+### 8. Algoritmo `FlowEngine::next(flow_id)` (Pseudocódigo)
 ```
 1. Cargar eventos → reconstruir FlowInstance.
 2. Si completed=true -> Err(FlowAlreadyCompleted).
@@ -151,7 +291,7 @@ pub struct FlowEvent { pub seq: u64, pub flow_id: Uuid, pub kind: FlowEventKind,
 14. Persistir todos los eventos atómicamente (in-memory = push secuencial).
 ```
 
-## 9. Fingerprint (Reglas)
+### 9. Fingerprint (Reglas)
 Incluye EXACTAMENTE (orden estable):
 ```
 {
@@ -166,13 +306,13 @@ Se serializa usando `canonical_json` (claves ordenadas, sin espacios innecesario
 
 Definition hash = hash(canonical_json(lista de step_id en orden + (opcional) versiones internas de cada step si existieran)).
 
-## 10. Determinismo – Reglas Concretas
+### 10. Determinismo – Reglas Concretas
 - Ordenar arrays que no tengan semántica de orden (e.g. `input_hashes`).
 - No usar System Time dentro del fingerprint (solo en eventos como metadata, no afecta hash).
 - Evitar Random / Thread scheduling (ejecución secuencial estricta).
 - Los params deben ser estabilizados (sin campos dinámicos). Si llegan params externos, deben filtrarse / ordenarse.
 
-## 11. Invariantes a Chequear
+### 11. Invariantes a Chequear
 | ID | Invariante | Momento | Acción |
 |----|-----------|---------|--------|
 | INV_CORE_1 | No re-ejecución Step terminal | before StepStarted | return error |
@@ -181,7 +321,7 @@ Definition hash = hash(canonical_json(lista de step_id en orden + (opcional) ver
 | INV_CORE_4 | Orden eventos estable | post run comparación | diff textual vacío |
 | INV_CORE_5 | Hash artifact = hash(payload canonical) | construcción artifact | assert en debug |
 
-## 12. Tests (Escenarios)
+### 12. Tests (Escenarios)
 1. run_linear_single_step: 1 step sin inputs produce eventos [FlowInitialized, StepStarted, StepFinished, FlowCompleted].
 2. run_linear_two_steps: segundo step recibe outputs del primero (hashes correctos).
 3. determinism_repeated_run: ejecutar mismo FlowDefinition 3 veces → concatenar eventos (sin ts) y comparar igualdad textual.
@@ -190,7 +330,7 @@ Definition hash = hash(canonical_json(lista de step_id en orden + (opcional) ver
 6. invalid_input_kind: step requiere kind que no aparece → error determinista.
 7. canonical_json_ordering: mapa con claves desordenadas genera mismo hash comparado contra versión ordenada.
 
-## 13. Plan de Implementación Incremental
+### 13. Plan de Implementación Incremental
 Fase A: Utilidades canonical_json + hashing + Artifact struct + tests unitarios.
 Fase B: Traits StepDefinition, StepStatus, StepRunResult, StepSlot.
 Fase C: EventStore in-memory + tipos FlowEvent.
@@ -200,21 +340,21 @@ Fase F: Fingerprint cálculo y verificación + tests determinismo.
 Fase G: Manejo de fallo + test failure_does_not_advance.
 Fase H: Pulido documentación + checklist invariantes.
 
-## 14. Criterios GATE_F2 (Detallados)
+### 14. Criterios GATE_F2 (Detallados)
 - G1: 3 ejecuciones idénticas => `event_log_repr(run1) == event_log_repr(run2) == run3` (ignorando campos `ts`).
 - G2: Todos los fingerprints de steps coinciden entre runs.
 - G3: No aparece ninguna función / enum referenciando semántica química (`Molecule`, `Property`, etc.) en crate `chem-core`.
 - G4: Tests anteriores pasan (mínimo 7). Cobertura: líneas clave (>80% en módulo core de hashing + engine).
 - G5: `canonical_json` es determinista (test con repetición 20 iteraciones produce mismo hash).
 
-## 15. Extensiones Futuras (Fuera de F2, preparar diseño)
+### 15. Extensiones Futuras (Fuera de F2, preparar diseño)
 - RetryPolicy (hook en StepFailed para decidir reintentos).
 - Branching (derivar FlowInstance nuevo con subset steps). 
 - PolicyEngine (decisiones runtime basadas en eventos previos).
 - Persistencia durable (sqlite/postgres) + índices.
 - Event queries (filtrado por step_id, rango seq).
 
-## 16. Ejemplo Concreto Mini (2 Steps)
+### 16. Ejemplo Concreto Mini (2 Steps)
 Step 0 (GenerateSeed): no inputs, params `{ "n": 2 }`, produce artifact JSON `[1,2]` -> hash hA.
 Step 1 (SumValues): requiere GenericJson, lee `[1,2]`, produce `{ "sum":3 }` -> hash hB.
 Fingerprint Step0 = hash({engine_version, step_id:"generate_seed", input_hashes:[], params:{"n":2}, definition_hash}).
@@ -229,13 +369,13 @@ Eventos secuencia estable (omit `ts`):
 5 FlowCompleted
 ```
 
-## 17. Recomendaciones de Implementación
+### 17. Recomendaciones de Implementación
 - Centralizar canonical_json en módulo `hashing` ya existente (`canonical_json.rs`). Añadir función `hash_value(&Value) -> String`.
 - Añadir constante `ENGINE_VERSION: &str = "F2.0"`.
 - Mantener funciones puras: `compute_step_fingerprint(inputs_hashes_sorted, params, step_id, definition_hash) -> String`.
 - Añadir helper para construir `FlowInitialized` en arranque si no existen eventos.
 
-## 18. Checklist Rápida de Código (pre merge F2)
+### 18. Checklist Rápida de Código (pre merge F2)
 [] Módulo hashing expandido (canonical ordena claves; arrays intactas).
 [] Trait StepDefinition + struct dummy para tests.
 [] EventStoreInMemory + append/list + seq impl.
@@ -245,7 +385,7 @@ Eventos secuencia estable (omit `ts`):
 [] Documentación actualizada (este archivo vinculado en README sección roadmap/feat F2).
 [] Sin referencias a dominio químico en `chem-core` (grep manual / CI check).
 
-## 19. Métrica de Éxito
+### 19. Métrica de Éxito
 Primera versión capaz de servir como base para introducir Branching determinista sin refactor profundo (interfaces estables: StepDefinition, EventStore, FlowEngine::next signature).
 
 ---
