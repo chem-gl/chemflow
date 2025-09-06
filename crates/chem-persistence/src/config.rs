@@ -7,7 +7,7 @@ use dotenvy::dotenv;
 
 // Carga perezosa del archivo .env una sola vez.
 static DOTENV_LOADED: Lazy<()> = Lazy::new(|| {
-    let _ = dotenv(); // ignora error si no existe .env
+    let _ = dotenv(); 
 });
 
 #[derive(Debug, Clone)]

@@ -33,7 +33,6 @@ fn parity_inmemory_vs_pg() {
         let mem_events = mem_store.list(flow_id);
 
         // Postgres run
-    let cfg = DbConfig::from_env(); // se mantiene por si queremos comparar parámetros
     let pool = with_pool(|p| p.clone());
     if pool.is_none() { eprintln!("skip pg parity (sin pool global)"); return; }
     let mut pg_store = PgEventStore::new(PoolProvider{ pool: pool.unwrap() });

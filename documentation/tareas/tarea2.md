@@ -448,4 +448,220 @@ Estructura interna usada para separar cálculo de resultados (fingerprint, hashe
 
 Resumen: Documento alineado con implementación real tras refactor a input único, soporte de señales, flow fingerprint agregado y nuevas invariantes.
 
+---
+
+## 22. Ergonomía Tipada: Macros y Builder del Engine (NOVEDAD)
+
+Para reducir el boilerplate y reforzar el tipado en Steps y Artifacts, se incorporaron:
+
+- Macros para declarar Artifacts y Steps fuertemente tipados: `typed_artifact!` y `typed_step!` (exportadas por `chem-core`).
+- Un builder tipado del `FlowEngine` que valida en compilación la compatibilidad IO entre pasos y en runtime que el primer paso sea `Source`.
+
+Importación típica:
+
+```rust
+use chem_core::{typed_artifact, typed_step, FlowEngine};
+use chem_core::step::StepKind;
+```
+
+### 22.1. Artifacts tipados con `typed_artifact!`
+
+Formas soportadas:
+
+- KIND por defecto (`GenericJson`):
+
+```rust
+typed_artifact!(TextOut { text: String });
+```
+
+- KIND explícito:
+
+```rust
+typed_artifact!(MyData { a: i32, b: String } kind: chem_core::model::ArtifactKind::GenericJson);
+```
+
+La macro genera:
+
+- `struct` público con campos + `schema_version: u32`.
+- Implementación de `ArtifactSpec` (requerido por el engine).
+
+### 22.2. Steps tipados con `typed_step!`
+
+La macro crea `struct` + implementación de `TypedStep` (y, por adaptación, `StepDefinition`). Hay dos variantes:
+
+- `source`: primer paso, no recibe input (`input=None`).
+- `step`: pasos `Transform` o `Sink` con `input` y `output` tipados.
+
+Ejemplos reales (pipeline de 4 pasos):
+
+```rust
+// 1) Fuente: recibe un seed por campo y emite el texto en mayúsculas
+typed_step! {
+    source SeedStep {
+        id: "seed_text",
+        output: TextOut,
+        params: (),
+        fields { seed: String },
+        run(me, _p) {
+            let upper = me.seed.to_uppercase();
+            TextOut { text: upper, schema_version: 1 }
+        }
+    }
+}
+
+// 2) Transform: divide en chars
+typed_step! {
+    step SplitStep {
+        id: "split_chars",
+        kind: StepKind::Transform,
+        input: TextOut,
+        output: CharsPas,
+        params: (),
+        run(_self, inp, _p) {
+            let chars: Vec<char> = inp.text.chars().collect();
+            CharsPas { chars, schema_version: 1 }
+        }
+    }
+}
+
+// 3) Transform: reenvía
+typed_step! {
+    step ForwardStep {
+        id: "forward_chars",
+        kind: StepKind::Transform,
+        input: CharsPas,
+        output: CharsPas,
+        params: (),
+        run(_self, inp, _p) { CharsPas { chars: inp.chars, schema_version: 1 } }
+    }
+}
+
+// 4) Sink: imprime y cuenta
+typed_step! {
+    step PrintAndCountStep {
+        id: "print_count",
+        kind: StepKind::Sink,
+        input: CharsPas,
+        output: CountOut,
+        params: (),
+        run(_self, inp, _p) {
+            let joined: String = inp.chars.iter().map(|c| c.to_string()).collect::<Vec<_>>().join("-");
+            println!("Chars: {}", joined);
+            CountOut { count: joined.chars().filter(|c| *c != '-').count(), schema_version: 1 }
+        }
+    }
+}
+```
+
+Notas:
+
+- El identificador del “self” en `run(...)` no debe ser la palabra reservada `self`; use `me`, `_self`, etc.
+- La macro cubre el caso de éxito simple. Si necesitas emitir señales (`StepSignal`) desde un `run`, puedes:
+  - Implementar `TypedStep` manualmente, o
+  - Extender la macro (futuro) para una variante con señales.
+
+### 22.3. Builder tipado del Engine
+
+Construcción ergonómica in-memory con validaciones:
+
+```rust
+let mut engine = FlowEngine::new()
+    .firstStep(SeedStep::new("HolaMundo".to_string())) // alias camelCase disponible
+    .addStep(SplitStep::new())
+    .addStep(ForwardStep::new())
+    .addStep(PrintAndCountStep::new())
+    .build();
+engine.set_name("demo_chars");
+engine.run_to_end().expect("run ok");
+```
+
+Garantías del builder:
+
+- En compilación: `addStep<N>` exige `N::Input == Prev::Output` (vía trait `SameAs`), evitando cadenas inválidas.
+- En runtime: `firstStep` paniquea si el primer paso no es `Source` (INV_CORE_SRC).
+- La definición y el `flow_id` por defecto quedan fijados en el engine; se exponen lecturas “zero-arg”.
+
+Lecturas disponibles (modo por defecto):
+
+- `engine.events()` → `Vec<FlowEvent>`
+- `engine.event_variants()` → `Vec<&'static str>` abreviado `I,S,F,X,G,C`
+- `engine.flow_fingerprint()` → `Option<String>`
+- `engine.last_step_output_typed::<T>(step_id)` → último output tipado del step `step_id`
+
+### 22.4. Paso de parámetros tipados (Params)
+
+Cada `TypedStep` declara un tipo `Params` (serializable) que contribuye al fingerprint del step. En F2 el engine usa `params_default()` del step.
+
+Patrones soportados hoy:
+
+- Parametrización por `Default` del tipo `Params`.
+- Configuración por campos del `struct` del step (pasados al constructor `new(...)`).
+
+Ejemplo de `Params` propio:
+
+```rust
+#[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
+struct SplitParams { keep_hyphen: bool }
+
+typed_step! {
+    step SplitStep2 {
+        id: "split2",
+        kind: StepKind::Transform,
+        input: TextOut,
+        output: CharsPas,
+        params: SplitParams,
+        run(_self, inp, p) {
+            let mut chars: Vec<char> = inp.text.chars().collect();
+            if !p.keep_hyphen { chars.retain(|&c| c != '-') }
+            CharsPas { chars, schema_version: 1 }
+        }
+    }
+}
+```
+
+Notas importantes:
+
+- El engine toma `params_default()` (deriva de `Default::default()`). Si necesitas que los parámetros dependan de campos del step (por instancia), implementa `TypedStep` manualmente o extiende la macro para soportar `params_from_fields` (futuro).
+- Los `Params` se serializan y participan del fingerprint (determinismo).
+
+### 22.5. Ejemplo completo (resumen)
+
+```rust
+typed_artifact!(TextOut  { text: String });
+typed_artifact!(CharsPas { chars: Vec<char> });
+typed_artifact!(CountOut { count: usize });
+
+// Steps: Seed -> Split -> Forward -> Print/Count
+// (ver ejemplos en 22.2)
+
+let mut engine = FlowEngine::new()
+    .firstStep(SeedStep::new("HolaMundo".to_string()))
+    .addStep(SplitStep::new())
+    .addStep(ForwardStep::new())
+    .addStep(PrintAndCountStep::new())
+    .build();
+engine.set_name("demo_chars");
+engine.run_to_end().unwrap();
+
+// Lecturas
+let variants = engine.event_variants().unwrap_or_default();
+let flow_fp  = engine.flow_fingerprint().unwrap_or_default();
+if let Some(Ok(out)) = engine.last_step_output_typed::<CountOut>("print_count") {
+    println!("count={}", out.inner.count);
+}
+```
+
+### 22.6. Errores y validaciones esperadas
+
+- Primer paso no `Source` → `panic!("El primer step debe ser de tipo Source")` en el builder; y/o `CoreEngineError::FirstStepMustBeSource` en ejecución.
+- Encadenamiento inválido en compilación (tipo de entrada/salida no coincide): error de trait bound del compilador (fallo en `N::Input: SameAs<Prev::Output>`).
+
+---
+
+## 23. Próximos pasos sugeridos (F2+)
+
+- Macro `typed_step!` con soporte para emitir señales y para derivar `Params` desde los campos de instancia.
+- API para inyectar `Params` no-default por instancia de ejecución.
+- Ejemplos con stores persistentes (Postgres) usando el mismo builder tipado.
+
 

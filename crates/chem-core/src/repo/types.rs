@@ -66,7 +66,7 @@ impl FlowRepository for InMemoryFlowRepository {
                                 if let Some(slot) = steps.get_mut(*step_index) { slot.status = StepStatus::Failed; slot.fingerprint = Some(fingerprint.clone()); slot.finished_at = Some(ev.ts); }
                             }
                 FlowEventKind::FlowCompleted { .. } => completed = true,
-                FlowEventKind::StepSignal { .. } => { /* no-op: señales no alteran estado central */ },
+                FlowEventKind::StepSignal { .. } => {  },
             }
         }
         let cursor = steps.iter().position(|s| matches!(s.status, StepStatus::Pending)).unwrap_or(steps.len());
@@ -81,5 +81,13 @@ pub fn build_flow_definition(step_ids: &[&str], steps: Vec<Box<dyn StepDefinitio
     let canonical = to_canonical_json(&ids_json);
     let definition_hash = hash_str(&canonical);
     FlowDefinition::new(steps, definition_hash)
+}
+
+/// Builder alternativo: recibe directamente los steps y extrae sus ids en orden.
+/// Facilita al usuario no tener que mantener manualmente el arreglo `step_ids`.
+pub fn build_flow_definition_auto(steps: Vec<Box<dyn StepDefinition>>) -> FlowDefinition {
+    let ids: Vec<String> = steps.iter().map(|s| s.id().to_string()).collect();
+    let id_refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+    build_flow_definition(&id_refs, steps)
 }
 

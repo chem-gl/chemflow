@@ -1,5 +1,3 @@
-//! Pruebas básicas de configuración y pool (requiere DATABASE_URL válido en entorno).
-
 use chem_persistence::config::DbConfig;
 mod test_support; use test_support::with_pool;
 
@@ -11,7 +9,6 @@ fn create_pool_from_env() {
     if pool.is_none() { eprintln!("skip create_pool_from_env (sin pool global)"); return; }
     let pool = pool.unwrap();
     let mut conn = pool.get().expect("conn");
-    // Sonda trivial de validez (no falla ejecutar un simple query vacio)
     use diesel::connection::SimpleConnection;
     conn.batch_execute("SELECT 1;\n").expect("select 1");
     if std::env::var("LEAK_POOL").is_ok() { std::mem::forget(pool); eprintln!("LEAK_POOL activo en connection_tests"); }

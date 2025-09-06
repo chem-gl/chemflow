@@ -32,10 +32,10 @@ fn engine_flow_fingerprint_pg_vs_memory() {
     if std::env::var("DATABASE_URL").is_err() { eprintln!("skip engine_flow_fingerprint_pg_vs_memory (no DATABASE_URL)"); return; }
     let flow_id = Uuid::new_v4();
     // InMemory run
-    let mut mem_engine = FlowEngine::new(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+    let mut mem_engine = FlowEngine::new_with_stores(InMemoryEventStore::default(), InMemoryFlowRepository::new());
     let def_mem = build_flow_definition(&["seed_pg","add_pg"], vec![Box::new(Seed), Box::new(Add)]);
-    mem_engine.next(flow_id, &def_mem).unwrap();
-    mem_engine.next(flow_id, &def_mem).unwrap();
+    mem_engine.next_with(flow_id, &def_mem).unwrap();
+    mem_engine.next_with(flow_id, &def_mem).unwrap();
     let mem_events = mem_engine.event_store.list(flow_id);
     let final_fp_mem = mem_events.iter().find_map(|e| if let FlowEventKind::FlowCompleted { flow_fingerprint } = &e.kind { Some(flow_fingerprint.clone()) } else { None }).expect("mem flowcompleted");
 
@@ -45,16 +45,13 @@ fn engine_flow_fingerprint_pg_vs_memory() {
     // Fuerza de aislamiento: usar siempre (1,1) independientemente de config externa para detectar si el crash desaparece.
     let pool = build_pool(&cfg.url, 1, 1).expect("pool 1x1");
     let provider = PoolProvider { pool };
-    let mut pg_engine = FlowEngine::new(PgEventStore::new(provider), PgFlowRepository::new());
+    let mut pg_engine = FlowEngine::new_with_stores(PgEventStore::new(provider), PgFlowRepository::new());
     let def_pg = build_flow_definition(&["seed_pg","add_pg"], vec![Box::new(Seed), Box::new(Add)]);
-    pg_engine.next(flow_id, &def_pg).unwrap();
-    pg_engine.next(flow_id, &def_pg).unwrap();
+    pg_engine.next_with(flow_id, &def_pg).unwrap();
+    pg_engine.next_with(flow_id, &def_pg).unwrap();
     let pg_events = pg_engine.event_store.list(flow_id);
     let final_fp_pg = pg_events.iter().find_map(|e| if let FlowEventKind::FlowCompleted { flow_fingerprint } = &e.kind { Some(flow_fingerprint.clone()) } else { None }).expect("pg flowcompleted");
 
     assert_eq!(final_fp_mem, final_fp_pg, "Flow fingerprint debe coincidir entre InMemory y Postgres");
-
-    // Drops explícitos para observar si el crash ocurre durante liberación de recursos.
-    drop(pg_engine); // fuerza drop antes de fin de test
-    // Nota: el pool se droppea automáticamente junto con provider (poseído por PgEventStore), pero acá ya lo liberamos.
-}
+    drop(pg_engine);  // Asegura que se cierre la conexión antes de la siguiente prueba
+ }

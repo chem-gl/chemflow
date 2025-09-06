@@ -11,8 +11,8 @@ pub mod engine;
 pub mod errors;
 
 // Re-exports públicos principales
-pub use engine::FlowEngine;
+pub use engine::{FlowEngine, FlowCtx};
 pub use model::{Artifact, ArtifactKind};
-pub use step::{StepDefinition, StepKind, StepStatus, StepRunResult};
+pub use step::{StepDefinition, StepKind, StepStatus, StepRunResult, TypedStep, StepRunResultTyped, Pipe, SameAs};
 pub use event::{FlowEvent, FlowEventKind, EventStore, InMemoryEventStore};
 pub use repo::{FlowRepository, build_flow_definition, InMemoryFlowRepository, FlowDefinition};

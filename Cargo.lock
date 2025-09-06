@@ -437,7 +437,7 @@ dependencies = [
  "r2d2",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.16",
  "uuid",
 ]
 
@@ -474,6 +474,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "cargo-tarpaulin",
+ "chem-core",
+ "chem-domain",
  "chrono",
  "dashmap",
  "dotenvy",
