@@ -23,6 +23,7 @@ once_cell = "1.19"
 sha2 = "0.10"
 chem-domain = { path = "crates/chem-domain" }
 chem-core = { path = "crates/chem-core" }
+chem-persistence = { path = "crates/chem-persistence" }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -49,3 +50,8 @@ members = [
 
 [patch.crates-io]
 pyo3 = { git = "https://github.com/PyO3/pyo3", tag = "v0.26.0" }
+
+[features]
+default = []
+# Habilita el ejemplo de persistencia en Postgres desde main.rs
+pg_demo = []

@@ -1,0 +1,73 @@
+
+### F4 – Adaptadores y Steps Iniciales (chem-adapters)
+
+| Núcleo                                                                              | Contrato Estabilizado                              | GATE_F4                          | Paralelo Seguro                |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------- | -------------------------------- | ------------------------------ |
+| DomainStepAdapter, AcquireMoleculesStep, ComputePropertiesStep stub, Artifact shape | `Artifact {id, kind, hash, payload, metadata_min}` | Hash artifact estable (snapshot) | Bosquejo Normalize / Aggregate |
+
+Objetivos Clave:
+
+- Traducir dominio a artifacts neutrales.
+- Validar pipeline Acquire→Compute.
+
+Plan ordenado (pasos y entregables):
+
+0) Pre-chequeos (sin cambios de código)
+- Validar en `chem-core` que `Artifact` tiene forma `{ id, kind, hash, payload, metadata_min }` y que el hash depende sólo del `payload` canónico.
+- Verificar que `chem-core` no referencia tipos del dominio (grep `chem_domain`).
+ 
+1) Contrato de adaptación en `chem-adapters`
+- En `crates/chem-adapters/src/lib.rs` definir el trait `DomainArtifactEncoder` para empaquetar dominio → `Artifact` neutral:
+	- `encode_molecule(&Molecule) -> Artifact`
+	- `encode_family(&MoleculeFamily) -> Artifact`adapter 
+	- `encode_property(&MolecularProperty) -> Artifact`
+    - Despues el artifact donde se combinan estos artifact ya que el paso solo acepta un artifact
+- Definir `ArtifactKind` locales del adapter (no en core):
+	- `chem.molecule.v1`, `chem.family.v1`, `chem.molecular_property.v1`.
+- Especificar `payload` canónico mínimo:
+	- Molecule: `{ inchikey, smiles?, inchi? }`
+	- Family: `{ family_hash, ordered_keys: [inchikey...] }`
+	- Property: `{ molecule_inchikey, property_kind, value, units?, provider?, version?, step_id_ref?, family_hash_ref }`
+- Entregable: módulo compila + tests unitarios de serialización y hash estable.
+
+2) `AcquireMoleculesStep` (Source determinista)
+- Dataset sintético fijo (`synthetic_v1`) con moléculas ordenadas determinísticamente.
+- Produce un artifact `chem.family.v1` (y opcionalmente artifacts por molécula en el futuro; OFF por defecto).
+- Validar: `hash` del artifact de familia corresponde al `family_hash` del dominio.
+- Entregables: step implementado + tests de determinismo y forma de payload.
+
+3) `ComputePropertiesStep` (Transform stub, sin selección)
+- Input: `chem.family.v1` → Output: N artifacts `chem.molecular_property.v1` (uno por molécula).
+- Valores stub deterministas (p.ej., `score = len(inchikey)`, `units = "au"`).
+- Prohibido filtrar: N in == N out; cada artifact referencia `molecule_inchikey` y `family_hash_ref`.
+- Entregables: step + tests de no filtrado, referencialidad y hashes estables.
+
+4) Test de integración Acquire→Compute
+- Construir `FlowEngine` in-memory con ambos steps.
+- Correr 3 veces y afirmar: variantes de eventos idénticas, `flow_fingerprint` idéntico, hash del artifact de familia estable, y N properties == N moléculas.
+- Entregable: test verde documentando IDs de steps y dataset `synthetic_v1`.
+
+5) Ejemplo `examples/basic_workflow.toml`
+- Contenido mínimo:
+	- `[flow] name = "basic_acquire_compute"`
+	- `[[steps]] id = "acquire_molecules" kind = "Source" params.dataset = "synthetic_v1"`
+	- `[[steps]] id = "compute_properties" kind = "Transform" params.kind = "stub_v1"`
+- Añadir snippet de uso en README correspondiente.
+
+6) Verificaciones finales (puertas)
+- No filtrado: assert explícito (N in == N out).
+- Artifact shape congelado: snapshot JSON de `payload` y `kind`.
+- Hash estable: asserts para familia y al menos una property.
+- Revisión cero tipos dominio en `chem-core`: repetir grep y anotar OK.
+
+7) Higiene y docs
+- Documentar contrato del encoder y `ArtifactKind` en `chem-adapters` con `///` e invariantes.
+- Actualizar `documentation/diagramas-final.md` (sección F4) con estado y ejemplo mínimo.
+- Opcional: proponer desglose por PRs (Encoder, Acquire, Compute, Integración+Ejemplo).
+
+GATE_F4:
+
+- Pipeline lineal produce artifacts hashables reproducibles.
+- Artifact shape congelado.
+- Se empieza a escametizar la base de datos.
+---

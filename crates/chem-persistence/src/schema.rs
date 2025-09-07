@@ -1,4 +1,9 @@
-//! Esquema Diesel (generado manualmente para F3). Reemplazable con `diesel print-schema`.
+//! Esquema Diesel (generado manualmente para F3). Reemplazable con `diesel
+//! print-schema`.
+//!
+//! Tablas:
+//! - `event_log`: log append-only de eventos por `flow_id` con `seq` como PK.
+//! - `workflow_step_artifacts`: deduplicación por hash de artifacts producidos.
 
 diesel::table! {
     event_log (seq) {
@@ -20,7 +25,4 @@ diesel::table! {
     }
 }
 
-diesel::allow_tables_to_appear_in_same_query!(
-    event_log,
-    workflow_step_artifacts,
-);
+diesel::allow_tables_to_appear_in_same_query!(event_log, workflow_step_artifacts,);

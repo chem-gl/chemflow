@@ -1,9 +1,9 @@
+use crate::error::DomainError;
 use crate::molecule::Molecule;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
-use crate::error::DomainError;
 use std::collections::HashSet;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoleculeFamily {
@@ -18,16 +18,14 @@ pub struct MoleculeFamily {
 impl MoleculeFamily {
     /// Crea una familia inmutable a partir de moléculas con metadatos
     pub fn new<I>(mols: I, provenance: serde_json::Value) -> Result<Self, DomainError>
-    where I: IntoIterator<Item = Molecule>
+        where I: IntoIterator<Item = Molecule>
     {
         let list: Vec<Molecule> = mols.into_iter().collect();
         // Validar duplicados por InChIKey
         let mut seen = HashSet::new();
         for m in &list {
             if !seen.insert(m.inchikey().to_owned()) {
-                return Err(DomainError::ValidationError(
-                    format!("Molécula duplicada en familia: {}", m.inchikey())
-                ));
+                return Err(DomainError::ValidationError(format!("Molécula duplicada en familia: {}", m.inchikey())));
             }
         }
         let id = Uuid::new_v4();
@@ -37,16 +35,14 @@ impl MoleculeFamily {
             hasher.update(m.inchikey().as_bytes());
         }
         let family_hash = format!("{:x}", hasher.finalize());
-        Ok(MoleculeFamily {
-            id,
-            name: None,
-            description: None,
-            family_hash,
-            provenance,
-            frozen: true,
-            molecules: list,
-        })
-    } 
+        Ok(MoleculeFamily { id,
+                            name: None,
+                            description: None,
+                            family_hash,
+                            provenance,
+                            frozen: true,
+                            molecules: list })
+    }
     pub fn with_name(&self, name: impl Into<String>) -> Self {
         let mut new = self.clone();
         new.name = Some(name.into());
@@ -60,9 +56,7 @@ impl MoleculeFamily {
     pub fn add_molecule(&self, molecule: Molecule) -> Result<Self, DomainError> {
         // No permitir duplicados en la familia
         if self.molecules.iter().any(|m| m.inchikey() == molecule.inchikey()) {
-            return Err(DomainError::ValidationError(
-                format!("Molécula ya existe: {}", molecule.inchikey())
-            ));
+            return Err(DomainError::ValidationError(format!("Molécula ya existe: {}", molecule.inchikey())));
         }
         let mut list = self.molecules.clone();
         list.push(molecule);
@@ -72,22 +66,17 @@ impl MoleculeFamily {
             hasher.update(m.inchikey().as_bytes());
         }
         let family_hash = format!("{:x}", hasher.finalize());
-        Ok(MoleculeFamily {
-            id,
-            name: self.name.clone(),
-            description: self.description.clone(),
-            family_hash,
-            provenance: self.provenance.clone(),
-            frozen: true,
-            molecules: list,
-        })
+        Ok(MoleculeFamily { id,
+                            name: self.name.clone(),
+                            description: self.description.clone(),
+                            family_hash,
+                            provenance: self.provenance.clone(),
+                            frozen: true,
+                            molecules: list })
     }
     /// Devuelve un nuevo objeto sin la molécula cuyo InChIKey coincide
     pub fn remove_molecule(&self, inchikey: &str) -> Self {
-        let list: Vec<Molecule> = self.molecules.iter()
-            .cloned()
-            .filter(|m| m.inchikey() != inchikey)
-            .collect();
+        let list: Vec<Molecule> = self.molecules.iter().filter(|m| m.inchikey() != inchikey).cloned().collect();
         let id = Uuid::new_v4();
         // Hash = sha256(inchikeys concatenados post-remoción)
         let mut hasher = Sha256::new();
@@ -95,15 +84,13 @@ impl MoleculeFamily {
             hasher.update(m.inchikey().as_bytes());
         }
         let family_hash = format!("{:x}", hasher.finalize());
-        MoleculeFamily {
-            id,
-            name: self.name.clone(),
-            description: self.description.clone(),
-            family_hash,
-            provenance: self.provenance.clone(),
-            frozen: true,
-            molecules: list,
-        }
+        MoleculeFamily { id,
+                         name: self.name.clone(),
+                         description: self.description.clone(),
+                         family_hash,
+                         provenance: self.provenance.clone(),
+                         frozen: true,
+                         molecules: list }
     }
     /// Retorna la lista inmutable de moléculas de la familia
     pub fn molecules(&self) -> &[Molecule] {
@@ -116,9 +103,15 @@ impl MoleculeFamily {
     pub fn is_frozen(&self) -> bool {
         self.frozen
     }
-    pub fn id(&self) -> Uuid { self.id }
-    pub fn name(&self) -> Option<&String> { self.name.as_ref() }
-    pub fn description(&self) -> Option<&String> { self.description.as_ref() }
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+    pub fn name(&self) -> Option<&String> {
+        self.name.as_ref()
+    }
+    pub fn description(&self) -> Option<&String> {
+        self.description.as_ref()
+    }
     pub fn compare(&self, other: &MoleculeFamily) -> bool {
         self.family_hash == other.family_hash
     }

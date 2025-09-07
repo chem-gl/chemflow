@@ -1,13 +1,18 @@
-use chem_persistence::pg::build_pool;
 use chem_persistence::config::DbConfig;
-mod test_support; use test_support::with_pool;
-use uuid::Uuid;
+use chem_persistence::pg::build_pool;
+mod test_support;
 use diesel::prelude::*;
+use test_support::with_pool;
+use uuid::Uuid;
 
-// Test manual que intenta violar el constraint de event_type con un INSERT directo.
+// Test manual que intenta violar el constraint de event_type con un INSERT
+// directo.
 #[test]
 fn event_type_constraint_rejects_invalid() {
-    if std::env::var("DATABASE_URL").is_err() { eprintln!("skip (no DATABASE_URL)"); return; }
+    if std::env::var("DATABASE_URL").is_err() {
+        eprintln!("skip (no DATABASE_URL)");
+        return;
+    }
     let pool = with_pool(|p| p.clone()).unwrap();
     let mut conn = pool.get().unwrap();
     // Intento insertar tipo inválido

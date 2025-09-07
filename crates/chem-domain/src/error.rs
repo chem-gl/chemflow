@@ -1,5 +1,5 @@
-use thiserror::Error;
 use chemengine::EngineError;
+use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum DomainError {
     #[error("{0}")]

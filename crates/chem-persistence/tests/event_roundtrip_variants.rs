@@ -1,12 +1,15 @@
 use chem_core::{EventStore, FlowEventKind};
-use chem_persistence::pg::{build_pool, PgEventStore, PoolProvider};
 use chem_persistence::config::DbConfig;
-use uuid::Uuid;
+use chem_persistence::pg::{build_pool, PgEventStore, PoolProvider};
 use serde_json::Value;
+use uuid::Uuid;
 
 #[test]
 fn roundtrip_all_variants_enum_json_full() {
-    if std::env::var("DATABASE_URL").is_err() { eprintln!("skip (no DATABASE_URL)"); return; }
+    if std::env::var("DATABASE_URL").is_err() {
+        eprintln!("skip (no DATABASE_URL)");
+        return;
+    }
     let cfg = DbConfig::from_env();
     // Fuerza 1x1 para aislar posibles issues en destrucción de múltiples conexiones
     let pool = build_pool(&cfg.url, 1, 1).expect("pool");
@@ -24,7 +27,9 @@ fn roundtrip_all_variants_enum_json_full() {
         FlowEventKind::FlowCompleted { flow_fingerprint: "flowfp".into() },
     ];
 
-    for k in variants.clone() { store.append_kind(flow_id, k); }
+    for k in variants.clone() {
+        store.append_kind(flow_id, k);
+    }
     let stored = store.list(flow_id);
     assert_eq!(stored.len(), variants.len());
     for (expected, got) in variants.iter().zip(stored.iter()) {

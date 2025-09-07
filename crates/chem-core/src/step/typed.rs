@@ -79,10 +79,10 @@ impl<T> crate::step::StepDefinition for T where T: TypedStep + 'static
         let params: <Self as TypedStep>::Params = ctx.params_as().unwrap_or_else(|_| self.params_default());
 
         // 2) Decodificar input si existe (para Source vendrá `None`).
-        let typed_in: Option<<Self as TypedStep>::Input> = match ctx.input.as_ref() {
-            Some(a) => Some(<Self as TypedStep>::Input::from_artifact(a).expect("input artifact decode")),
-            None => None,
-        };
+        let typed_in: Option<<Self as TypedStep>::Input> =
+            ctx.input
+               .as_ref()
+               .map(|a| <Self as TypedStep>::Input::from_artifact(a).expect("input artifact decode"));
 
         // 3) Ejecutar lógica tipada y convertir a resultado neutro.
         <Self as TypedStep>::run_typed(self, typed_in, params).into_neutral()

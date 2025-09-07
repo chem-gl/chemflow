@@ -1,7 +1,6 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 
- 
 pub fn to_canonical_json(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),

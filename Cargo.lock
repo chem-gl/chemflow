@@ -476,6 +476,7 @@ dependencies = [
  "cargo-tarpaulin",
  "chem-core",
  "chem-domain",
+ "chem-persistence",
  "chrono",
  "dashmap",
  "dotenvy",

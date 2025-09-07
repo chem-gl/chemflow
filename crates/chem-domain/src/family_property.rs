@@ -1,7 +1,7 @@
+use crate::MoleculeFamily;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
-use crate::MoleculeFamily;
 
 #[derive(Debug, Clone)]
 pub struct FamilyProperty<'a, V, TypeMeta> {
@@ -15,18 +15,16 @@ pub struct FamilyProperty<'a, V, TypeMeta> {
     metadata: TypeMeta,
 }
 impl<'a, V, TypeMeta> FamilyProperty<'a, V, TypeMeta>
-where
-    V: Serialize + Clone,
-    TypeMeta: Serialize + Clone,
+    where V: Serialize + Clone,
+          TypeMeta: Serialize + Clone
 {
-    pub fn new(
-        family: &'a MoleculeFamily,
-        property_type: &str,
-        value: V,
-        quality: Option<String>,
-        preferred: bool,
-        metadata: TypeMeta,
-    ) -> Self {
+    pub fn new(family: &'a MoleculeFamily,
+               property_type: &str,
+               value: V,
+               quality: Option<String>,
+               preferred: bool,
+               metadata: TypeMeta)
+               -> Self {
         let mut hasher = Sha256::new();
         // Hash basado en el family_hash de la familia
         hasher.update(family.family_hash().as_bytes());
@@ -42,16 +40,14 @@ where
         hasher.update(metadata_json.as_bytes());
         let value_hash = format!("{:x}", hasher.finalize());
 
-        FamilyProperty {
-            id: Uuid::new_v4(),
-            family,
-            property_type: property_type.to_string(),
-            value,
-            quality,
-            preferred,
-            value_hash,
-            metadata,
-        }
+        FamilyProperty { id: Uuid::new_v4(),
+                         family,
+                         property_type: property_type.to_string(),
+                         value,
+                         quality,
+                         preferred,
+                         value_hash,
+                         metadata }
     }
 
     pub fn id(&self) -> &Uuid {
@@ -87,36 +83,30 @@ where
     }
 
     pub fn with_quality(&self, quality: Option<String>) -> Self {
-        FamilyProperty::new(
-            self.family,
-            &self.property_type,
-            self.value.clone(),
-            quality,
-            self.preferred,
-            self.metadata.clone(),
-        )
+        FamilyProperty::new(self.family,
+                            &self.property_type,
+                            self.value.clone(),
+                            quality,
+                            self.preferred,
+                            self.metadata.clone())
     }
 
     pub fn with_metadata(&self, metadata: TypeMeta) -> Self {
-        FamilyProperty::new(
-            self.family,
-            &self.property_type,
-            self.value.clone(),
-            self.quality.clone(),
-            self.preferred,
-            metadata,
-        )
+        FamilyProperty::new(self.family,
+                            &self.property_type,
+                            self.value.clone(),
+                            self.quality.clone(),
+                            self.preferred,
+                            metadata)
     }
 
     pub fn with_preferred(&self, preferred: bool) -> Self {
-        FamilyProperty::new(
-            self.family,
-            &self.property_type,
-            self.value.clone(),
-            self.quality.clone(),
-            preferred,
-            self.metadata.clone(),
-        )
+        FamilyProperty::new(self.family,
+                            &self.property_type,
+                            self.value.clone(),
+                            self.quality.clone(),
+                            preferred,
+                            self.metadata.clone())
     }
     pub fn compare(&self, other: &FamilyProperty<'a, V, TypeMeta>) -> bool {
         self.value_hash == other.value_hash
