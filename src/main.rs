@@ -12,6 +12,9 @@ use chem_persistence::{PgEventStore, PgFlowRepository, PoolProvider};
 use chem_adapters::artifacts::FamilyPropertiesArtifact;
 use chem_adapters::steps::acquire::AcquireMoleculesStep;
 use chem_adapters::steps::compute::ComputePropertiesStep;
+use chem_adapters::encoder::{DomainArtifactEncoder, SimpleDomainEncoder};
+use chem_domain::MoleculeFamily;
+use serde_json::to_string_pretty;
 
 // --------------------
 // Artifactos tipados
@@ -97,6 +100,21 @@ fn main() {
 
     println!("Molecula 2: {}", molecule2);
     println!("InChI de Molecula 2: {}", molecule2.inchi());
+
+    // F4: uso del encoder dominio → artifact neutral (molecule y family)
+    let encoder = SimpleDomainEncoder::default();
+    let mol_art = encoder.encode_molecule(&molecule1);
+    println!("[F4] Artifact molécula (kind={:?}) payload={}",
+             mol_art.kind,
+             to_string_pretty(&mol_art.payload).unwrap_or_default());
+    // Construcción de familia determinista mínima con provenance estable
+    let provenance = serde_json::json!({ "source": "main_demo", "version": 1 });
+    let family = MoleculeFamily::new(vec![molecule1, molecule2], provenance).expect("family ok");
+    println!("[F4] family_hash(dom): {}", family.family_hash());
+    let fam_art = encoder.encode_family(&family);
+    println!("[F4] Artifact familia (kind={:?}) payload={}",
+             fam_art.kind,
+             to_string_pretty(&fam_art.payload).unwrap_or_default());
     // Construir y ejecutar el flujo
     let mut engine = FlowEngine::new().firstStep(SeedStep::new("HolaMundo".to_string()))
                                       .add_step(SplitStep::new())
@@ -142,6 +160,17 @@ fn main() {
         }
         let variants = engine4.event_variants().unwrap_or_default();
         println!("[F4] eventos: {:?}", variants);
+
+        // Segunda corrida idéntica para demostrar determinismo de F4
+        let mut engine4b = FlowEngine::new()
+            .firstStep(AcquireMoleculesStep::new())
+            .add_step(ComputePropertiesStep::new())
+            .build();
+        engine4b.set_name("demo_f4_acquire_compute");
+        engine4b.run_to_end().expect("run ok");
+        let fp_a = engine4.flow_fingerprint().unwrap_or_default();
+        let fp_b = engine4b.flow_fingerprint().unwrap_or_default();
+        println!("[F4] determinismo: fp_a == fp_b ? {}", fp_a == fp_b);
     }
 
 }

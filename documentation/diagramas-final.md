@@ -2043,7 +2043,6 @@ GATE_F7:
 | Núcleo                                                             | Contrato Estabilizado            | GATE_F8                     | Paralelo Seguro        |
 | ------------------------------------------------------------------ | -------------------------------- | --------------------------- | ---------------------- |
 | Migración STEP_EXECUTION_ERRORS, persistir retry_count/max_retries | Esquema errores + attempt_number | Rehidratación DB == memoria | Métricas error (luego) |
-
 Objetivos Clave:
 
 - Auditoría granular de fallos.
