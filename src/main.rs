@@ -1,14 +1,10 @@
-// Importing Molecule from the chem-domain crate
-use chem_domain::Molecule;
 
-// --- Ejemplo F2: Steps tipados para un flujo determinista ---
+use chem_domain::Molecule;
 use chem_core::step::StepKind;
 use chem_core::FlowEngine;
 use chem_core::{typed_artifact, typed_step};
-// Helper público: crea un builder de FlowEngine con repositorio (Postgres)
-// para usar de forma concisa como FlowEngine::new().firstStep(...)
+
 use chem_persistence::{PgEventStore, PgFlowRepository, PoolProvider};
-// F4: Steps y artefacto de chem-adapters
 use chem_adapters::artifacts::FamilyPropertiesArtifact;
 use chem_adapters::steps::acquire::AcquireMoleculesStep;
 use chem_adapters::steps::compute::ComputePropertiesStep;
@@ -172,6 +168,9 @@ fn main() {
         let fp_b = engine4b.flow_fingerprint().unwrap_or_default();
         println!("[F4] determinismo: fp_a == fp_b ? {}", fp_a == fp_b);
     }
+    println!("--- Iniciando validación F5 ---");
+    run_f5_lowlevel();
+
 
 }
 mod pg_persistence_demo {
@@ -275,4 +274,83 @@ fn maybe_run_pg_demo() {
     if let Err(e) = pg_persistence_demo::run_replay_parity() {
         eprintln!("[PG DEMO] Error (replay): {e:?}");
     }
+}
+
+// Ejemplo F5: uso directo de PgEventStore/PgFlowRepository (append/list/replay)
+fn run_f5_lowlevel() {
+    // Bring the trait for repo.load into scope
+    use chem_core::repo::FlowRepository;
+
+    // Ejecutar sólo si hay DATABASE_URL definido
+    if std::env::var("DATABASE_URL").is_err() {
+        eprintln!("[F5] DATABASE_URL no definido; omitiendo ejemplo F5");
+        return;
+    }
+    // Hint operabilidad: si usas libpq con GSSAPI, considera desactivar GSS encryption
+    // añadiendo `?gssencmode=disable` a DATABASE_URL o exportando PGGSSENCMODE=disable
+    // si observas errores de k5_mutex en teardown.
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        let gssen_env = std::env::var("PGGSSENCMODE").unwrap_or_default();
+        if !url.contains("gssencmode=") && gssen_env.is_empty() {
+            eprintln!("[F5] Sugerencia: si observas k5_mutex_lock al finalizar, prueba gssencmode=disable (libpq+GSS)");
+        }
+    }
+    // 1) Pool + provider
+    let pool = match chem_persistence::build_dev_pool_from_env() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[F5] Error construyendo pool: {e}");
+            return;
+        }
+    };
+    let provider = PoolProvider { pool };
+
+    // 2) Instanciar store y repo Postgres
+    let mut store = PgEventStore::new(provider);
+    let repo = PgFlowRepository::new();
+
+    // 3) Simular ejecución mínima (append-only) con artifact hash (64 hex)
+    use chem_core::{EventStore, FlowEventKind};
+    use uuid::Uuid;
+    let flow_id = Uuid::new_v4();
+    let output_hash = "f00df00df00df00df00df00df00df00df00df00df00df00df00df00df00df00d".to_string();
+    store.append_kind(flow_id, FlowEventKind::FlowInitialized { definition_hash: "f5_demo_def".into(), step_count: 1 });
+    store.append_kind(flow_id, FlowEventKind::StepStarted { step_index: 0, step_id: "f5_step".into() });
+    store.append_kind(flow_id, FlowEventKind::StepFinished { step_index: 0,
+                                                             step_id: "f5_step".into(),
+                                                             outputs: vec![output_hash],
+                                                             fingerprint: "fp_demo".into() });
+    store.append_kind(flow_id, FlowEventKind::FlowCompleted { flow_fingerprint: "fp_demo".into() });
+
+    // 4) Listar eventos y mostrar variantes compactas
+    let events = store.list(flow_id);
+    let variants: Vec<&'static str> = events
+        .iter()
+        .map(|e| match e.kind {
+            chem_core::FlowEventKind::FlowInitialized { .. } => "I",
+            chem_core::FlowEventKind::StepStarted { .. } => "S",
+            chem_core::FlowEventKind::StepFinished { .. } => "F",
+            chem_core::FlowEventKind::StepFailed { .. } => "X",
+            chem_core::FlowEventKind::StepSignal { .. } => "G",
+            chem_core::FlowEventKind::FlowCompleted { .. } => "C",
+        })
+        .collect();
+    println!("[F5] variantes lowlevel: {:?}", variants);
+
+    // 5) Replay con PgFlowRepository usando una definición mínima
+    struct DemoStep;
+    impl chem_core::step::StepDefinition for DemoStep {
+        fn id(&self) -> &str { "f5_step" }
+        fn base_params(&self) -> serde_json::Value { serde_json::Value::Null }
+        fn run(&self, _ctx: &chem_core::model::ExecutionContext) -> chem_core::step::StepRunResult {
+            chem_core::step::StepRunResult::Success { outputs: vec![] }
+        }
+        fn kind(&self) -> chem_core::step::StepKind { chem_core::step::StepKind::Transform }
+        fn name(&self) -> &str { self.id() }
+    }
+    let steps: Vec<Box<dyn chem_core::step::StepDefinition>> = vec![Box::new(DemoStep)];
+    let def = chem_core::build_flow_definition(&["f5_step"], steps);
+    let instance = repo.load(flow_id, &events, &def);
+    println!("[F5] replay lowlevel completed? {} (steps={})", instance.completed, def.len());
+    drop(store);
 }

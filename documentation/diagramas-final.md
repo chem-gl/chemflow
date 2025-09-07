@@ -1974,7 +1974,8 @@ Objetivos Clave:
 
 - Resolución multi-proveedor determinista.
 - Evento auditable con rationale.
-
+- Rationale JSON canónico y conversion a datos tipados.
+- verificacion de datos fuertemnete tipados. y funciones parametizables para asegurar que la selección es estable y reproducible.
 Pasos sugeridos:
 
 1. Struct `PropertyCandidate`.
@@ -1982,7 +1983,7 @@ Pasos sugeridos:
 3. Emitir evento antes de StepCompleted.
 4. Tests: determinismo selección.
 5. Parámetros incluidos en fingerprint.
-6. Rationale JSON canónico.
+6. Rationale JSON canónico y conversion a datos tipados.
 7. Feature flags para políticas extra.
 
 GATE_F6:

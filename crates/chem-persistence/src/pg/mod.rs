@@ -1,15 +1,17 @@
 //! Implementaciones Postgres (Diesel) de los traits del core.
-//! F3: EventStore append-only y FlowRepository (replay delegada) equivalentes a
-//! memoria.
 //!
-//! Diseño:
-//! - `PgEventStore`: inserta eventos en `event_log` y lista por `flow_id`
-//!   ordenando por `seq`. Serializa el enum completo a JSONB en `payload` y
-//!   mantiene `event_type` en minúsculas para constraints/consultas.
-//! - Inserción de artifacts: opcional y best-effort; registra sólo el hash en
-//!   `workflow_step_artifacts` para deduplicación.
-//! - `PgFlowRepository`: reusa la lógica de replay in-memory para mantener
-//!   paridad.
+//! Objetivo general del módulo:
+//! - Proveer una capa de persistencia durable (Postgres) con paridad 1:1 respecto al backend en memoria.
+//! - Mantener determinismo del motor: el replay de eventos debe reconstruir el mismo estado y fingerprints.
+//! - Aislar completamente el mapeo dominio ↔ filas de DB del `chem-core`.
+//!
+//! Estado F5 (Persistencia Postgres mínima, paridad 1:1):
+//! - EventStore append-only con orden total por `seq` (BIGSERIAL), sin updates ni deletes.
+//! - Lectura por `flow_id` ordenada por `seq`, equivalente al backend in-memory.
+//! - Inserción opcional de artifacts de step dentro de la MISMA transacción del evento `StepFinished`
+//!   (atomicidad cuando el feature de artifacts está activo; desactivable con feature `no-artifact-insert`).
+//! - Manejo básico de errores transitorios: reintento con backoff en `append` y `list`.
+//! - `PgFlowRepository`: delega el replay a la implementación InMemory para asegurar paridad exacta.
 
 use chem_core::repo::FlowInstance;
 use chrono::{DateTime, Utc};
@@ -19,20 +21,35 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use chem_core::{EventStore, FlowDefinition, FlowEvent, FlowEventKind, FlowRepository, InMemoryFlowRepository};
-use log::{debug, error};
+use log::{debug, error, warn};
 
 use crate::error::PersistenceError;
 use crate::migrations::run_pending_migrations;
 use crate::schema::{event_log, workflow_step_artifacts};
 
+/// Alias de tipo para el pool r2d2 de conexiones Postgres.
+///
+/// Notas operativas:
+/// - El pool se construye con `min_idle` (mínimo de conexiones inactivas) y `max_size` (límite superior total).
+/// - Al construirlo, se corre automáticamente el set de migraciones pendientes (una sola vez).
 pub type PgPool = r2d2::Pool<ConnectionManager<PgConnection>>;
 
 /// Trait interno para obtener una conexión (para testear fácilmente).
+/// Proveedor abstracto de conexiones.
+///
+/// Este trait permite:
+/// - Inyectar un pool real (producción/tests de integración).
+/// - Simular/factorear en tests unitarios sin acoplar a r2d2.
+///
+/// Contrato:
+/// - Debe devolver una conexión válida o `PersistenceError::TransientIo`/equivalente en caso de error.
 pub trait ConnectionProvider: Send + Sync + 'static {
+    /// Obtiene una conexión lista para ejecutar consultas Diesel.
     fn connection(&self) -> Result<r2d2::PooledConnection<ConnectionManager<PgConnection>>, PersistenceError>;
 }
 
 /// Implementación de provider a partir de un pool r2d2.
+/// Implementación concreta de `ConnectionProvider` respaldada por un `PgPool`.
 pub struct PoolProvider {
     pub pool: PgPool,
 }
@@ -45,6 +62,14 @@ impl ConnectionProvider for PoolProvider {
 }
 
 /// Row mapeada de la tabla `event_log` (shape mínima anticipada).
+/// Fila mapeada de la tabla `event_log` para lecturas.
+///
+/// Campos:
+/// - `seq`: identificador monotónico (BIGSERIAL) del evento, global a la tabla.
+/// - `flow_id`: correlación del flujo al que pertenece el evento.
+/// - `ts`: timestamp asignado por la base de datos (DEFAULT now()).
+/// - `event_type`: pista/constraint (minúsculas) del tipo de evento.
+/// - `payload`: JSONB con la representación completa del enum `FlowEventKind`.
 #[derive(Queryable, Debug)]
 pub struct EventRow {
     pub seq: i64,
@@ -55,6 +80,10 @@ pub struct EventRow {
 }
 
 /// Estructura para inserción (NewEventRow) - `RETURNING` seq, ts.
+/// Estructura para inserción en `event_log`.
+///
+/// Se inserta siempre dentro de una transacción Diesel (`build_transaction().read_write()`),
+/// devolviendo `seq` y `ts` vía `RETURNING`.
 #[derive(Insertable, Debug)]
 #[diesel(table_name = event_log)]
 pub struct NewEventRow<'a> {
@@ -65,6 +94,10 @@ pub struct NewEventRow<'a> {
 
 /// Fila para insertar artifact (deduplicación por hash via ON CONFLICT DO
 /// NOTHING lógica manual).
+/// Fila para insertar en `workflow_step_artifacts`.
+///
+/// - `artifact_hash` funge como PK para deduplicación (length=64 verificado por CHECK).
+/// - `produced_in_seq` referencia el `seq` del evento `StepFinished` que lo produjo (FK con `ON DELETE RESTRICT`).
 #[derive(Insertable, Debug)]
 #[diesel(table_name = workflow_step_artifacts)]
 pub struct NewArtifactRow<'a> {
@@ -75,30 +108,66 @@ pub struct NewArtifactRow<'a> {
     pub produced_in_seq: i64,
 }
 
-// Retry simple para conflictos de serialización.
+/// Determina si un error es transitorio (recomendado reintentar con backoff).
+///
+/// Cubre:
+/// - Conflictos de serialización (deadlocks y nivel de aislamiento).
+/// - Errores de IO transitorios de pool/conexión.
+/// - Mensajes comunes de desconexión/timeout detectados por texto (best-effort).
+fn is_retryable(e: &PersistenceError) -> bool {
+    match e {
+        PersistenceError::SerializationConflict => true,
+        PersistenceError::TransientIo(_) => true,
+        // Algunos mensajes de error (dependen de driver/pg) pueden llegar como Unknown
+        // con texto. Hacemos best-effort string match sin acoplar a SQLSTATE.
+        PersistenceError::Unknown(msg) => {
+            let m = msg.to_lowercase();
+            m.contains("deadlock detected")
+                || m.contains("could not serialize access due to concurrent update")
+                || m.contains("terminating connection due to administrator command")
+                || m.contains("connection closed")
+                || m.contains("connection refused")
+                || m.contains("timeout")
+        }
+        _ => false,
+    }
+}
+
+/// Retry simple con backoff exponencial muy pequeño (hasta 3 intentos).
+///
+/// Política:
+/// - Intentos: 3.
+/// - Backoff: 15ms, 30ms, 45ms.
+/// - Logs: se emite `warn!` por intento.
+///
+/// Garantías:
+/// - No altera semántica de negocio; sólo repite la unidad de trabajo provista por `f`.
 fn with_retry<F, T>(mut f: F) -> Result<T, PersistenceError>
-    where F: FnMut() -> Result<T, PersistenceError>
+where
+    F: FnMut() -> Result<T, PersistenceError>,
 {
     let mut attempts = 0;
     loop {
         match f() {
-            Err(PersistenceError::SerializationConflict) if attempts < 3 => {
-                std::thread::sleep(std::time::Duration::from_millis(15 * ((attempts + 1) as u64)));
+            Err(e) if is_retryable(&e) && attempts < 3 => {
+                let delay_ms = 15 * ((attempts + 1) as u64);
+                warn!("retryable error (attempt {}): {:?} -> sleeping {}ms", attempts + 1, e, delay_ms);
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 attempts += 1;
             }
-            r => {
-                return r;
-            }
+            r => return r,
         }
     }
 }
 
-// SERIALIZACIÓN: guardamos el enum completo como JSON, pero usamos event_type =
-// variante en minúsculas para respetar el constraint existente en la migración.
+// SERIALIZACIÓN: guardamos el enum completo como JSON (payload), y además
+// persistimos `event_type` (minúsculas) para cumplir constraint y facilitar
+// ciertas consultas.
 fn serialize_full_enum(kind: &FlowEventKind) -> Value {
     serde_json::to_value(kind).expect("serialize FlowEventKind")
 }
 
+/// Mapea la variante del enum a un string en minúsculas, estable en el tiempo.
 fn event_type_for(kind: &FlowEventKind) -> &'static str {
     match kind {
         FlowEventKind::FlowInitialized { .. } => "flowinitialized",
@@ -110,6 +179,8 @@ fn event_type_for(kind: &FlowEventKind) -> &'static str {
     }
 }
 
+/// Deserializa una `EventRow` a `FlowEvent`, utilizando el JSON completo del enum
+/// almacenado en `payload`. Si por alguna razón el JSON no es válido, devuelve `None`.
 fn deserialize_full_enum(row: EventRow) -> Option<FlowEvent> {
     // Aceptamos cualquiera de los tipos válidos; payload siempre es JSON del enum
     // completo.
@@ -120,11 +191,16 @@ fn deserialize_full_enum(row: EventRow) -> Option<FlowEvent> {
                      ts: row.ts })
 }
 
-/// Implementación Postgres de EventStore.
+/// Implementación Postgres de `EventStore` (append-only).
+///
+/// Responsabilidades:
+/// - `append_kind`: insertar un evento y, opcionalmente, artifacts producidos en el mismo commit.
+/// - `list`: devolver todos los eventos de un flow ordenados por `seq` (replay determinista).
 pub struct PgEventStore<P: ConnectionProvider> {
     pub provider: P,
 }
 impl<P: ConnectionProvider> PgEventStore<P> {
+    /// Crea un `PgEventStore` a partir de un `ConnectionProvider` (generalmente `PoolProvider`).
     pub fn new(provider: P) -> Self {
         Self { provider }
     }
@@ -135,58 +211,51 @@ impl<P: ConnectionProvider> EventStore for PgEventStore<P> {
         debug!("append_kind:start flow_id={flow_id} kind={}", kind_variant_name(&kind));
         let event_type = event_type_for(&kind);
         let payload = serialize_full_enum(&kind);
+    // Transacción atómica: inserción de evento y (si aplica) artifacts.
+    // - Si falla cualquiera de las inserciones, se revierte todo.
+    // - Se usa retry/backoff para errores transitorios.
         let inserted: (i64, DateTime<Utc>) = with_retry(|| {
-                                                 let mut conn = self.provider.connection()?;
-                                                 conn.build_transaction()
-                                                     .read_write()
-                                                     .run(|tx_conn| {
-                                                         diesel
-                        ::insert_into(event_log::table)
+            let mut conn = self.provider.connection()?;
+            conn.build_transaction()
+                .read_write()
+                .run(|tx_conn| {
+                    // Paso 1: insertar el evento
+                    let (seq, ts): (i64, DateTime<Utc>) = diesel::insert_into(event_log::table)
                         .values(NewEventRow { flow_id: &flow_id, event_type, payload: &payload })
                         .returning((event_log::seq, event_log::ts))
-                        .get_result(tx_conn)
-                                                     })
-                                                     .map_err(PersistenceError::from)
-                                             }).expect("insert event");
+                        .get_result(tx_conn)?;
 
-        // Paso 2: insertar artifacts (best-effort) fuera de la transacción del evento.
-        #[cfg(not(feature = "no-artifact-insert"))]
-        {
-            if let FlowEventKind::StepFinished { outputs, .. } = &kind {
-                if !outputs.is_empty() {
-                    match self.provider.connection() {
-                        Ok(mut conn2) => {
-                            for h in outputs {
-                                if h.len() != 64 {
-                                    debug!("skip artifact hash len!=64 hash={h}");
-                                    continue;
-                                }
-                                let null = Value::Null;
-                                let row = NewArtifactRow { artifact_hash: h,
-                                                           kind: "unknown",
-                                                           payload: &null,
-                                                           metadata: None,
-                                                           produced_in_seq: inserted.0 };
-                                if let Err(e) = diesel::insert_into(workflow_step_artifacts::table).values(&row)
-                                                                                                   .on_conflict_do_nothing()
-                                                                                                   .execute(&mut conn2)
-                                {
-                                    error!("artifact insert error hash={h} seq={} err={:?}", inserted.0, e);
+                    // Paso 2: insertar artifacts asociados (si feature activo)
+                    #[cfg(not(feature = "no-artifact-insert"))]
+                    {
+                        if let FlowEventKind::StepFinished { outputs, .. } = &kind {
+                            if !outputs.is_empty() {
+                                for h in outputs {
+                                    if h.len() != 64 {
+                                        debug!("skip artifact hash len!=64 hash={h}");
+                                        continue;
+                                    }
+                                    let null = Value::Null; // snapshot de payload/metadata diferido en F5
+                                    let row = NewArtifactRow { artifact_hash: h,
+                                                               kind: "unknown",
+                                                               payload: &null,
+                                                               metadata: None,
+                                                               produced_in_seq: seq };
+                                    // Dedupe por PK (artifact_hash)
+                                    diesel::insert_into(workflow_step_artifacts::table)
+                                        .values(&row)
+                                        .on_conflict_do_nothing()
+                                        .execute(tx_conn)?;
                                 }
                             }
                         }
-                        Err(e) => error!("artifact connection error seq={} err={:?}", inserted.0, e),
                     }
-                }
-            }
-        }
-        #[cfg(feature = "no-artifact-insert")]
-        {
-            if let FlowEventKind::StepFinished { outputs, .. } = &kind {
-                debug!("artifact insertion skipped by feature no-artifact-insert outputs={}",
-                       outputs.len());
-            }
-        }
+
+                    Ok::<(i64, DateTime<Utc>), diesel::result::Error>((seq, ts))
+                })
+                .map_err(PersistenceError::from)
+        })
+        .expect("insert event (with artifacts)");
 
         let ev = FlowEvent { seq: inserted.0 as u64,
                              flow_id,
@@ -199,22 +268,25 @@ impl<P: ConnectionProvider> EventStore for PgEventStore<P> {
     }
     fn list(&self, flow_id: Uuid) -> Vec<FlowEvent> {
         debug!("list:start flow_id={flow_id}");
-        let mut conn = self.provider.connection().expect("conn");
-        let query = event_log::table.filter(event_log::flow_id.eq(flow_id))
-                                    .order(event_log::seq.asc());
-        let rows: Vec<EventRow> = match query.load(&mut conn) {
-            Ok(r) => r,
-            Err(e) => {
-                error!("list:load error flow_id={flow_id} err={:?}", e);
-                panic!("diesel load error: {e}");
-            }
-        };
+    // Lectura robusta con retry ante fallos transitorios.
+    let rows: Vec<EventRow> = with_retry(|| {
+            let mut conn = self.provider.connection()?;
+            let query = event_log::table
+                .filter(event_log::flow_id.eq(flow_id))
+                .order(event_log::seq.asc());
+            query.load(&mut conn).map_err(PersistenceError::from)
+        })
+        .unwrap_or_else(|e| {
+            error!("list:load error flow_id={flow_id} err={:?}", e);
+            panic!("diesel load error: {e}");
+        });
         let events: Vec<FlowEvent> = rows.into_iter().filter_map(deserialize_full_enum).collect();
         debug!("list:done flow_id={flow_id} count={}", events.len());
         events
     }
 }
 
+/// Nombre legible de la variante del evento para logging/diagnóstico.
 fn kind_variant_name(kind: &FlowEventKind) -> &'static str {
     match kind {
         FlowEventKind::FlowInitialized { .. } => "FlowInitialized",
@@ -226,10 +298,14 @@ fn kind_variant_name(kind: &FlowEventKind) -> &'static str {
     }
 }
 
-/// Implementación Postgres de FlowRepository (delegate a replay in-memory
-/// simple).
+/// Implementación Postgres de `FlowRepository` delegada a la versión InMemory.
+///
+/// Decisión de diseño:
+/// - Para asegurar paridad exacta con el core y evitar duplicación de reglas, se reutiliza el
+///   `InMemoryFlowRepository` para construir el `FlowInstance` a partir de los eventos leídos.
 pub struct PgFlowRepository;
 impl PgFlowRepository {
+    /// Constructor sin estado.
     pub fn new() -> Self {
         Self
     }
@@ -248,6 +324,11 @@ impl FlowRepository for PgFlowRepository {
 }
 
 /// Construye un pool Postgres r2d2 a partir de URL.
+///
+/// Comportamiento:
+/// - Valida y ajusta tamaños (si `min_size > max_size`, usa `min_size = max_size`).
+/// - Ejecuta migraciones inmediatamente tras el primer `get()`.
+/// - Devuelve `PersistenceError::TransientIo` ante errores del pool/manager.
 pub fn build_pool(database_url: &str, min_size: u32, max_size: u32) -> Result<PgPool, PersistenceError> {
     let validated_min = if min_size == 0 { 1 } else { min_size };
     let validated_max = if max_size == 0 { 1 } else { max_size };
@@ -270,13 +351,13 @@ pub fn build_pool(database_url: &str, min_size: u32, max_size: u32) -> Result<Pg
     Ok(pool)
 }
 
-/// Alias explícito para semántica clara (igual a build_pool actualmente).
+/// Alias explícito para semántica clara (igual a `build_pool` actualmente).
 pub fn build_pool_with_migrations(database_url: &str, min: u32, max: u32) -> Result<PgPool, PersistenceError> {
     build_pool(database_url, min, max)
 }
 
-/// Helper conveniente para desarrollo: carga .env, lee configuración y
-/// construye pool (con migraciones).
+/// Helper de desarrollo: carga `.env`, lee configuración (DATABASE_URL, tamaños)
+/// y construye un pool ya migrado.
 pub fn build_dev_pool_from_env() -> Result<PgPool, PersistenceError> {
     crate::config::init_dotenv();
     let cfg = crate::config::DbConfig::from_env();
