@@ -8,6 +8,10 @@ use chem_core::{typed_artifact, typed_step};
 // Helper público: crea un builder de FlowEngine con repositorio (Postgres)
 // para usar de forma concisa como FlowEngine::new().firstStep(...)
 use chem_persistence::{PgEventStore, PgFlowRepository, PoolProvider};
+// F4: Steps y artefacto de chem-adapters
+use chem_adapters::artifacts::FamilyPropertiesArtifact;
+use chem_adapters::steps::acquire::AcquireMoleculesStep;
+use chem_adapters::steps::compute::ComputePropertiesStep;
 
 // --------------------
 // Artifactos tipados
@@ -118,7 +122,28 @@ fn main() {
         println!("Cantidad de letras: {}", out.inner.count);
     }
     println!("!Validación F2: OK (flujo ejecutado y completado determinísticamente)");
+    // validacion del flujo 3
     maybe_run_pg_demo();
+    // validacion del flujo 4
+    println!("--- Iniciando validación F4 ---");
+    {
+        // Pipeline F4: Acquire (Source) → Compute (Transform)
+        let mut engine4 = FlowEngine::new()
+            .firstStep(AcquireMoleculesStep::new())
+            .add_step(ComputePropertiesStep::new())
+            .build();
+        engine4.set_name("demo_f4_acquire_compute");
+        engine4.run_to_end().expect("run ok");
+        if let Some(Ok(out)) = engine4.last_step_output_typed::<FamilyPropertiesArtifact>("compute_properties") {
+            println!("[F4] propiedades calculadas: {}", out.inner.items.len());
+        }
+        if let Some(fp) = engine4.flow_fingerprint() {
+            println!("[F4] fingerprint: {}", fp);
+        }
+        let variants = engine4.event_variants().unwrap_or_default();
+        println!("[F4] eventos: {:?}", variants);
+    }
+
 }
 mod pg_persistence_demo {
     use super::*;
@@ -181,11 +206,14 @@ mod pg_persistence_demo {
                                                                   Box::new(PrintAndCountStep::new()),];
         let definition_a = chem_core::repo::build_flow_definition_auto(steps);
 
-         let mut engine1 = FlowEngine::new_with_definition(event_store1, repo1, definition_a);
+        let mut engine1 = FlowEngine::new_with_definition(event_store1, repo1, definition_a);
         engine1.set_default_flow_name("demo_pg_replay");
-        let fp1 = engine1.flow_fingerprint_default()
-                         .ok_or_else(|| "no fingerprint from engine1".to_string())?;
-        let variants1 = engine1.flow_fingerprint_default();
+        // Ejecutar el flujo una vez para materializar eventos en Postgres y obtener el flow_id
+        let flow_id = engine1.run_to_end_default_flow().map_err(|e| e.to_string())?;
+        let fp1 = engine1
+            .flow_fingerprint_default()
+            .ok_or_else(|| "no fingerprint from engine1".to_string())?;
+        let variants1 = engine1.event_variants_default();
         println!("[PG] Replay demo - eventos engine1: {:?}", variants1);
 
         // Motor 2 (limpio) lee y compara fingerprint desde la misma DB
@@ -194,10 +222,13 @@ mod pg_persistence_demo {
                                                                     Box::new(ForwardStep::new()),
                                                                     Box::new(PrintAndCountStep::new()),];
         let definition_b = chem_core::repo::build_flow_definition_auto(steps_b);
-        let engine2 = FlowEngine::new_with_definition(event_store2, repo2, definition_b);
-        let variants2 = engine2.flow_fingerprint_default();
-        let fp2 = engine2.flow_fingerprint_default()
-                         .ok_or_else(|| "no fingerprint from engine2".to_string())?;
+        let mut engine2 = FlowEngine::new_with_definition(event_store2, repo2, definition_b);
+        // Aseguramos que el segundo motor apunte al mismo flow_id para leer los eventos existentes
+        engine2.set_default_flow_id(flow_id);
+        let variants2 = engine2.event_variants_default();
+        let fp2 = engine2
+            .flow_fingerprint_default()
+            .ok_or_else(|| "no fingerprint from engine2".to_string())?;
         println!("[PG] Replay demo - eventos engine2: {:?}", variants2);
         if fp1 == fp2 {
             println!("[PG] Replay parity OK: fingerprint coincide");

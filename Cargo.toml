@@ -24,6 +24,7 @@ sha2 = "0.10"
 chem-domain = { path = "crates/chem-domain" }
 chem-core = { path = "crates/chem-core" }
 chem-persistence = { path = "crates/chem-persistence" }
+chem-adapters = { path = "crates/chem-adapters" }
 
 [dev-dependencies]
 tokio-test = "0.4"

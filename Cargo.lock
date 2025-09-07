@@ -379,6 +379,10 @@ name = "chem-adapters"
 version = "0.1.0"
 dependencies = [
  "chem-core",
+ "chem-domain",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -474,6 +478,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "cargo-tarpaulin",
+ "chem-adapters",
  "chem-core",
  "chem-domain",
  "chem-persistence",
