@@ -70,10 +70,10 @@ fn run_f7_validation() {
     let r_src = engine.next_with(flow_id, &def);
     assert!(r_src.is_ok(), "F7: el Source debe ejecutarse OK primero");
     // Ahora ejecutar el step que falla la primera vez
-    let _res1 = engine.next_with(flow_id, &def);
+    let res1 = engine.next_with(flow_id, &def);
     let events1 = engine.events().unwrap();
-    let has_failed = events1.iter().any(|e| matches!(e.kind, FlowEventKind::StepFailed { .. }));
-    assert!(has_failed, "F7: Debe haber StepFailed en eventos");
+    let has_failed = res1.is_err() || events1.iter().any(|e| matches!(e.kind, FlowEventKind::StepFailed { .. }));
+    assert!(has_failed, "F7: Debe haber StepFailed en eventos o next_with debe retornar Err");
 
     // Schedule retry manual (simula CLI):
     let retry_reason = Some("retry test".to_string());

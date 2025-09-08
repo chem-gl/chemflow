@@ -32,3 +32,20 @@ pub enum CoreEngineError {
     #[error("internal: {0}")]
     Internal(String),
 }
+
+/// Clasificación de errores para persistencia extendida (F8)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorClass {
+    Transient,
+    Permanent,
+    Validation,
+    Runtime,
+}
+
+/// Clasifica un error del engine en una categoría estable para políticas de retry y auditoría.
+pub fn classify_error(error: &CoreEngineError) -> ErrorClass {
+    match error {
+        CoreEngineError::Internal(_) | CoreEngineError::StorageError(_) => ErrorClass::Runtime,
+        CoreEngineError::InvalidStepIndex | CoreEngineError::MissingInputs | CoreEngineError::FirstStepMustBeSource | CoreEngineError::StepAlreadyTerminal | CoreEngineError::FlowCompleted | CoreEngineError::FlowHasFailed | CoreEngineError::RetryNotAllowed { .. } | CoreEngineError::InvalidTransition { .. } | CoreEngineError::PolicyViolation(_) => ErrorClass::Validation,
+    }
+}

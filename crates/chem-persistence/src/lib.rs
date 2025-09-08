@@ -20,4 +20,4 @@ pub mod schema; // generado manualmente para F3
 
 pub use config::init_dotenv;
 pub use error::PersistenceError;
-pub use pg::{build_dev_pool_from_env, ConnectionProvider, PgEventStore, PgFlowRepository, PgPool, PoolProvider};
+pub use pg::{build_dev_pool_from_env, ConnectionProvider, PgEventStore, PgFlowRepository, PgPool, PoolProvider, ErrorRow};

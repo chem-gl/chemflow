@@ -25,4 +25,16 @@ diesel::table! {
     }
 }
 
-diesel::allow_tables_to_appear_in_same_query!(event_log, workflow_step_artifacts,);
+diesel::table! {
+    step_execution_errors (id) {
+        id -> BigInt,
+        flow_id -> Uuid,
+        step_id -> Text,
+        attempt_number -> Integer,
+        error_class -> Text,
+        details -> Nullable<Jsonb>,
+        ts -> Timestamptz,
+    }
+}
+
+diesel::allow_tables_to_appear_in_same_query!(event_log, workflow_step_artifacts, step_execution_errors,);

@@ -21,11 +21,12 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use chem_core::{EventStore, FlowDefinition, FlowEvent, FlowEventKind, FlowRepository, InMemoryFlowRepository};
+use chem_core::errors::{CoreEngineError, ErrorClass, classify_error};
 use log::{debug, error, warn};
 
 use crate::error::PersistenceError;
 use crate::migrations::run_pending_migrations;
-use crate::schema::{event_log, workflow_step_artifacts};
+use crate::schema::{event_log, workflow_step_artifacts, step_execution_errors};
 
 /// Alias de tipo para el pool r2d2 de conexiones Postgres.
 ///
@@ -61,22 +62,26 @@ impl ConnectionProvider for PoolProvider {
     }
 }
 
-/// Row mapeada de la tabla `event_log` (shape mínima anticipada).
-/// Fila mapeada de la tabla `event_log` para lecturas.
+/// Row mapeada de la tabla `step_execution_errors` (shape mínima anticipada).
+/// Fila mapeada de la tabla `step_execution_errors` para lecturas.
 ///
 /// Campos:
-/// - `seq`: identificador monotónico (BIGSERIAL) del evento, global a la tabla.
-/// - `flow_id`: correlación del flujo al que pertenece el evento.
-/// - `ts`: timestamp asignado por la base de datos (DEFAULT now()).
-/// - `event_type`: pista/constraint (minúsculas) del tipo de evento.
-/// - `payload`: JSONB con la representación completa del enum `FlowEventKind`.
+/// - `id`: identificador único.
+/// - `flow_id`: correlación del flujo.
+/// - `step_id`: identificador del step.
+/// - `attempt_number`: número de intento.
+/// - `error_class`: clasificación del error.
+/// - `details`: JSONB con detalles.
+/// - `ts`: timestamp.
 #[derive(Queryable, Debug)]
-pub struct EventRow {
-    pub seq: i64,
+pub struct ErrorRow {
+    pub id: i64,
     pub flow_id: uuid::Uuid,
+    pub step_id: String,
+    pub attempt_number: i32,
+    pub error_class: String,
+    pub details: Option<Value>,
     pub ts: DateTime<Utc>,
-    pub event_type: String,
-    pub payload: Value,
 }
 
 /// Estructura para inserción (NewEventRow) - `RETURNING` seq, ts.
@@ -106,6 +111,42 @@ pub struct NewArtifactRow<'a> {
     pub payload: &'a Value,
     pub metadata: Option<&'a Value>,
     pub produced_in_seq: i64,
+}
+
+/// Row mapeada de la tabla `event_log` (shape mínima anticipada).
+/// Fila mapeada de la tabla `event_log` para lecturas.
+///
+/// Campos:
+/// - `seq`: identificador monotónico (BIGSERIAL) del evento, global a la tabla.
+/// - `flow_id`: correlación del flujo al que pertenece el evento.
+/// - `ts`: timestamp asignado por la base de datos (DEFAULT now()).
+/// - `event_type`: pista/constraint (minúsculas) del tipo de evento.
+/// - `payload`: JSONB con la representación completa del enum `FlowEventKind`.
+#[derive(Queryable, Debug)]
+pub struct EventRow {
+    pub seq: i64,
+    pub flow_id: uuid::Uuid,
+    pub ts: DateTime<Utc>,
+    pub event_type: String,
+    pub payload: Value,
+}
+
+/// Fila para insertar error de ejecución de step.
+/// Fila para insertar en `step_execution_errors`.
+///
+/// - `flow_id`: correlación del flujo.
+/// - `step_id`: identificador del step que falló.
+/// - `attempt_number`: número de intento (retry_count).
+/// - `error_class`: clasificación del error ('validation', 'runtime', etc.).
+/// - `details`: JSONB con detalles del error.
+#[derive(Insertable, Debug)]
+#[diesel(table_name = step_execution_errors)]
+pub struct NewErrorRow<'a> {
+    pub flow_id: &'a uuid::Uuid,
+    pub step_id: &'a str,
+    pub attempt_number: i32,
+    pub error_class: &'a str,
+    pub details: Option<&'a Value>,
 }
 
 /// Determina si un error es transitorio (recomendado reintentar con backoff).
@@ -253,6 +294,30 @@ impl<P: ConnectionProvider> EventStore for PgEventStore<P> {
                         }
                     }
 
+                    // Paso 3: insertar error si es StepFailed (F8)
+                    // Persiste detalles del error para auditoría granular y reconstrucción de timeline.
+                    // attempt_number simplificado a 1; futuro: contar StepStarted previos.
+                    if let FlowEventKind::StepFailed { step_id, error, .. } = &kind {
+                        let error_class = match classify_error(error) {
+                            ErrorClass::Runtime => "runtime",
+                            ErrorClass::Validation => "validation",
+                            ErrorClass::Transient => "transient",
+                            ErrorClass::Permanent => "permanent",
+                        };
+                        let details = serde_json::to_value(error).ok();
+                        let attempt_number = 1; // Simplificación: primer intento; en producción, calcular basado en eventos previos
+                        let error_row = NewErrorRow {
+                            flow_id: &flow_id,
+                            step_id,
+                            attempt_number,
+                            error_class,
+                            details: details.as_ref(),
+                        };
+                        diesel::insert_into(step_execution_errors::table)
+                            .values(&error_row)
+                            .execute(tx_conn)?;
+                    }
+
                     Ok::<(i64, DateTime<Utc>), diesel::result::Error>((seq, ts))
                 })
                 .map_err(PersistenceError::from)
@@ -285,6 +350,26 @@ impl<P: ConnectionProvider> EventStore for PgEventStore<P> {
         let events: Vec<FlowEvent> = rows.into_iter().filter_map(deserialize_full_enum).collect();
         debug!("list:done flow_id={flow_id} count={}", events.len());
         events
+    }
+}
+
+impl<P: ConnectionProvider> PgEventStore<P> {
+    /// Lista errores de ejecución para un flow_id, ordenados por ts.
+    pub fn list_errors(&self, flow_id: Uuid) -> Vec<ErrorRow> {
+        debug!("list_errors:start flow_id={flow_id}");
+        let rows: Vec<ErrorRow> = with_retry(|| {
+            let mut conn = self.provider.connection()?;
+            let query = step_execution_errors::table
+                .filter(step_execution_errors::flow_id.eq(flow_id))
+                .order(step_execution_errors::ts.asc());
+            query.load(&mut conn).map_err(PersistenceError::from)
+        })
+        .unwrap_or_else(|e| {
+            error!("list_errors:load error flow_id={flow_id} err={:?}", e);
+            vec![]
+        });
+        debug!("list_errors:done flow_id={flow_id} count={}", rows.len());
+        rows
     }
 }
 
