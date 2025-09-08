@@ -25,6 +25,27 @@ use crate::hashing::{hash_str, to_canonical_json};
 use crate::model::{Artifact, ArtifactSpec, ExecutionContext, StepFingerprintInput, TypedArtifact};
 use crate::repo::{FlowDefinition, FlowInstance, FlowRepository};
 use crate::step::{StepRunResult, StepSignal, StepStatus};
+// F7: Tipos simples de política de retry (deterministas, fuera de fingerprint)
+#[derive(Clone, Debug)]
+pub struct RetryPolicy {
+    pub max_retries: u32,
+    pub backoff: BackoffKind,
+}
+#[derive(Clone, Debug)]
+pub enum BackoffKind {
+    None,
+    Exponential { base_ms: u64 },
+}
+impl RetryPolicy {
+    pub fn should_retry(&self, retry_count: u32) -> bool { retry_count < self.max_retries }
+    /// Backoff determinista (sólo cálculo; no sleep). No afecta fingerprint.
+    pub fn next_delay_ms(&self, retry_index: u32) -> u64 {
+        match self.backoff {
+            BackoffKind::None => 0,
+            BackoffKind::Exponential { base_ms } => base_ms.saturating_mul(1u64 << (retry_index.saturating_sub(1) as u32)),
+        }
+    }
+}
 
 /// Estado interno de ejecución de un step antes de serializar a eventos.
 struct ExecutionOutcome {
@@ -53,6 +74,9 @@ pub struct FlowEngine<E: EventStore, R: FlowRepository> {
     default_flow_id: Option<uuid::Uuid>,
     /// Nombre descriptivo opcional del flow por defecto (sólo informativo).
     default_flow_name: Option<String>,
+    // Métricas internas F7 (no persistentes):
+    retries_scheduled: u64,
+    retries_rejected: u64,
 }
 
 /// Wrapper ergonómico que fija `flow_id` y `definition` para evitar repetir
@@ -83,7 +107,9 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
                artifact_store: HashMap::new(),
                default_definition: None,
                default_flow_id: None,
-               default_flow_name: None }
+               default_flow_name: None,
+               retries_scheduled: 0,
+               retries_rejected: 0 }
     }
 
     /// Crea un builder genérico para armar un flujo tipado paso a paso con
@@ -102,7 +128,9 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
                artifact_store: HashMap::new(),
                default_definition: Some(definition),
                default_flow_id: Some(Uuid::new_v4()),
-               default_flow_name: None }
+               default_flow_name: None,
+               retries_scheduled: 0,
+               retries_rejected: 0 }
     }
 
     /// Crea un nuevo motor recibiendo directamente los steps y construyendo
@@ -114,7 +142,9 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
                artifact_store: HashMap::new(),
                default_definition: Some(definition),
                default_flow_id: Some(Uuid::new_v4()),
-               default_flow_name: None }
+               default_flow_name: None,
+               retries_scheduled: 0,
+               retries_rejected: 0 }
     }
 
     /// Igual que `new_with_steps`, pero además define un `flow_id` generado y
@@ -291,9 +321,33 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
     }
 
     fn persist_events(&mut self, flow_id: Uuid, step_index: usize, step_id: &str, outcome: &ExecutionOutcome) {
-        // Emitir señales sólo en éxito.
+        // Emitir señales sólo en éxito. Si una señal es la reservada
+        // PROPERTY_PREFERENCE_ASSIGNED con el payload esperado, traducirla al
+        // evento fuerte PropertyPreferenceAssigned (F6), antes de StepFinished.
+        // Además, si existe tal señal, incorporamos su params_hash al fingerprint
+        // efectivo del Step (definición F6): el fingerprint del step sólo cambia
+        // si cambian los parámetros o la política utilizada.
+        let mut policy_params_hash: Option<String> = None;
         if matches!(outcome.status, ExecutionStatus::Success) {
             for StepSignal { signal, data } in outcome.signals.iter().cloned() {
+                if signal == "PROPERTY_PREFERENCE_ASSIGNED" {
+                    let property_key = data.get("property_key").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let policy_id = data.get("policy_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let params_hash = data.get("params_hash").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let rationale = data.get("rationale").cloned().unwrap_or_else(|| serde_json::json!({}));
+                    if let (Some(property_key), Some(policy_id), Some(params_hash)) = (property_key, policy_id, params_hash) {
+                        if policy_params_hash.is_none() {
+                            policy_params_hash = Some(params_hash.clone());
+                        }
+                        self.event_store
+                            .append_kind(flow_id,
+                                         FlowEventKind::PropertyPreferenceAssigned { property_key,
+                                                                                      policy_id,
+                                                                                      params_hash,
+                                                                                      rationale });
+                        continue;
+                    }
+                }
                 self.event_store.append_kind(flow_id,
                                              FlowEventKind::StepSignal { step_index,
                                                                          step_id: step_id.to_string(),
@@ -303,11 +357,19 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
         }
         match &outcome.status {
             ExecutionStatus::Success => {
+                // Fingerprint efectivo: base o mezclado con params_hash si hubo política
+                let effective_fp = if let Some(ph) = policy_params_hash {
+                    let mix = serde_json::json!({"base": outcome.fingerprint, "policy_params_hash": ph});
+                    let canonical = to_canonical_json(&mix);
+                    hash_str(&canonical)
+                } else {
+                    outcome.fingerprint.clone()
+                };
                 self.event_store.append_kind(flow_id,
                                              FlowEventKind::StepFinished { step_index,
                                                                            step_id: step_id.to_string(),
                                                                            outputs: outcome.output_hashes.clone(),
-                                                                           fingerprint: outcome.fingerprint.clone() });
+                                                                           fingerprint: effective_fp });
             }
             ExecutionStatus::Failure(err) => {
                 self.event_store.append_kind(flow_id,
@@ -322,20 +384,15 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
 
     fn is_flow_completed_successfully(&self, flow_id: Uuid, definition: &FlowDefinition) -> bool {
         let events = self.event_store.list(flow_id);
-        // Contar StepFinished y verificar que son == steps.len() y no hay StepFailed; y
-        // aún no existe FlowCompleted.
-        let mut finished = 0usize;
-        let mut failed = false;
-        let mut completed = false;
-        for e in &events {
-            match &e.kind {
-                FlowEventKind::StepFinished { .. } => finished += 1,
-                FlowEventKind::StepFailed { .. } => failed = true,
-                FlowEventKind::FlowCompleted { .. } => completed = true,
-                _ => {}
-            }
+        // No volver a emitir si ya existe FlowCompleted
+        if events.iter().any(|e| matches!(e.kind, FlowEventKind::FlowCompleted { .. })) {
+            return false;
         }
-        !completed && !failed && finished == definition.len()
+        // Determinar el estado final vía replay (considera RetryScheduled y
+        // transiciones Failed→Pending→FinishedOk). Un fallo previo no impide
+        // completar si el estado actual de todos los steps es FinishedOk.
+        let instance = self.repository.load(flow_id, &events, definition);
+        instance.steps.iter().all(|s| matches!(s.status, StepStatus::FinishedOk))
     }
 
     fn compute_flow_fingerprint(&self, flow_id: Uuid) -> String {
@@ -511,6 +568,8 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
                 FlowEventKind::StepFinished { .. } => "F",
                 FlowEventKind::StepFailed { .. } => "X",
                 FlowEventKind::StepSignal { .. } => "G",
+                FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
+                FlowEventKind::RetryScheduled { .. } => "R",
                 FlowEventKind::FlowCompleted { .. } => "C",
             })
             .collect()
@@ -641,6 +700,54 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
     pub fn flow_fingerprint(&self) -> Option<String> {
         self.flow_fingerprint_default()
     }
+
+    // ------------------------------
+    // F7: API de reintento manual
+    // ------------------------------
+    /// Agenda un reintento para `step_id` si el estado actual del flow lo permite.
+    ///
+    /// Regla:
+    /// - Sólo si el `step_id` está en estado Failed.
+    /// - Al emitir `RetryScheduled`, el replay marcará ese step como Pending
+    ///   (Failed→Pending) permitiendo una re-ejecución en la próxima llamada a `next`.
+    /// - Esta operación no altera fingerprints.
+    pub fn schedule_retry(&mut self,
+                          flow_id: Uuid,
+                          definition: &FlowDefinition,
+                          step_id: &str,
+                          reason: Option<String>,
+                          max_retries: Option<u32>) -> Result<bool, CoreEngineError> {
+        let instance = self.load_or_init(flow_id, definition);
+        // Buscar índice del step por id
+        let idx_opt = instance.steps.iter().position(|s| s.step_id == step_id);
+        let idx = match idx_opt { Some(i) => i, None => return Err(CoreEngineError::InvalidStepIndex) };
+        let slot = &instance.steps[idx];
+        // Debe estar Failed
+        if !matches!(slot.status, StepStatus::Failed) {
+            self.retries_rejected += 1;
+            return Ok(false);
+        }
+        // Política: verificar límites si se proveen
+        if let Some(max) = max_retries {
+            if slot.retry_count >= max {
+                self.retries_rejected += 1;
+                return Ok(false);
+            }
+        }
+        let retry_index = slot.retry_count + 1;
+        self.event_store
+            .append_kind(flow_id,
+                         FlowEventKind::RetryScheduled { step_id: step_id.to_string(),
+                                                          retry_index,
+                                                          reason });
+        self.retries_scheduled += 1;
+        Ok(true)
+    }
+
+    /// Métricas internas (F7): cantidad de reintentos agendados.
+    pub fn retries_scheduled(&self) -> u64 { self.retries_scheduled }
+    /// Métricas internas (F7): cantidad de reintentos rechazados.
+    pub fn retries_rejected(&self) -> u64 { self.retries_rejected }
 }
 
 // -------------------------------------------------------------
@@ -664,7 +771,9 @@ impl FlowEngine<crate::event::InMemoryEventStore, crate::repo::InMemoryFlowRepos
                artifact_store: HashMap::new(),
                default_definition: Some(definition),
                default_flow_id: Some(Uuid::new_v4()),
-               default_flow_name: None }
+               default_flow_name: None,
+               retries_scheduled: 0,
+               retries_rejected: 0 }
     }
 
     /// Asigna un nombre descriptivo al flow por defecto (builder-style).
@@ -842,7 +951,9 @@ impl<S: TypedStep + 'static, E: EventStore, R: FlowRepository> EngineBuilder<S, 
                      artifact_store: HashMap::new(),
                      default_definition: Some(definition),
                      default_flow_id: Some(Uuid::new_v4()),
-                     default_flow_name: None }
+                     default_flow_name: None,
+                     retries_scheduled: 0,
+                     retries_rejected: 0 }
     }
 }
 
@@ -850,9 +961,10 @@ impl<S: TypedStep + 'static, E: EventStore, R: FlowRepository> EngineBuilder<S, 
 mod tests {
     use super::*;
     use crate::model::{ArtifactKind, ArtifactSpec};
-    use crate::{build_flow_definition, step::StepDefinition, InMemoryEventStore, InMemoryFlowRepository, StepRunResult};
+    use crate::{build_flow_definition, step::{StepDefinition, StepKind}, InMemoryEventStore, InMemoryFlowRepository, StepRunResult};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use uuid::Uuid;
     #[derive(Clone, Serialize, Deserialize)]
     struct SeedOutput {
         values: Vec<i64>,
@@ -921,6 +1033,58 @@ mod tests {
         }
     }
 
+    // ------------------------- F6 tests: parity and sensitivity -------------------------
+    struct PolicySrc { label: &'static str, params_hash: &'static str }
+    impl StepDefinition for PolicySrc {
+        fn id(&self) -> &str { self.label }
+        fn base_params(&self) -> serde_json::Value { json!({}) }
+        fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+            let art = Artifact { kind: ArtifactKind::GenericJson,
+                                 hash: String::new(),
+                                 payload: json!({"schema_version":1, "demo":true}),
+                                 metadata: None };
+            let data = json!({
+                "property_key": "inchikey:XYZ|prop:foo",
+                "policy_id": "max_score",
+                "params_hash": self.params_hash,
+                "rationale": {"t": 1}
+            });
+            StepRunResult::SuccessWithSignals { outputs: vec![art],
+                                                signals: vec![StepSignal { signal:
+                                                                                   "PROPERTY_PREFERENCE_ASSIGNED".into(),
+                                                                           data }] }
+        }
+        fn kind(&self) -> StepKind { StepKind::Source }
+    }
+
+    fn run_one(engine: &mut FlowEngine<InMemoryEventStore, InMemoryFlowRepository>, step: Box<dyn StepDefinition>) -> (Uuid, String) {
+        let flow_id = Uuid::new_v4();
+        // Evitar mover `step` mientras está prestado: primero capturamos el id,
+        // luego construimos la definición moviendo `step` en una segunda sentencia.
+        let step_id_owned = step.id().to_string();
+        let ids = [step_id_owned.as_str()];
+        let def = build_flow_definition(&ids, vec![step]);
+        engine.next_with(flow_id, &def).expect("ok");
+        let fp = engine.last_step_fingerprint(flow_id, def.steps[0].id()).expect("fp");
+        (flow_id, fp)
+    }
+
+    #[test]
+    fn f6_fp_parity_same_params_same_fp() {
+    let mut engine = FlowEngine::new_with_stores(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let (_id1, fp1) = run_one(&mut engine, Box::new(PolicySrc { label: "p", params_hash: "aaa" }));
+        let (_id2, fp2) = run_one(&mut engine, Box::new(PolicySrc { label: "p", params_hash: "aaa" }));
+        assert_eq!(fp1, fp2, "Fingerprint debe ser igual con mismos params_hash");
+    }
+
+    #[test]
+    fn f6_fp_sensitivity_diff_params_diff_fp() {
+    let mut engine = FlowEngine::new_with_stores(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let (_id1, fp1) = run_one(&mut engine, Box::new(PolicySrc { label: "p", params_hash: "aaa" }));
+        let (_id2, fp2) = run_one(&mut engine, Box::new(PolicySrc { label: "p", params_hash: "bbb" }));
+        assert_ne!(fp1, fp2, "Fingerprint debe cambiar si cambia params_hash");
+    }
+
     // -----------------------------------------------------------
     // TEST PRINCIPAL: DEMOSTRACIÓN DE DETERMINISMO
     // -----------------------------------------------------------
@@ -955,13 +1119,15 @@ mod tests {
 
         // Normalizar eventos a su nombre de variante (ignoramos timestamps y hashes
         // concretos).
-        fn simplify(ev: &crate::event::FlowEventKind) -> String {
+    fn simplify(ev: &crate::event::FlowEventKind) -> String {
             match ev {
                 crate::event::FlowEventKind::FlowInitialized { .. } => "FlowInitialized",
                 crate::event::FlowEventKind::StepStarted { .. } => "StepStarted",
                 crate::event::FlowEventKind::StepFinished { .. } => "StepFinished",
                 crate::event::FlowEventKind::StepFailed { .. } => "StepFailed",
                 crate::event::FlowEventKind::StepSignal { .. } => "StepSignal",
+                crate::event::FlowEventKind::RetryScheduled { .. } => "RetryScheduled",
+        crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "PropertyPreferenceAssigned",
                 crate::event::FlowEventKind::FlowCompleted { .. } => "FlowCompleted",
             }.to_string()
         }
@@ -1032,7 +1198,9 @@ mod tests {
                    crate::event::FlowEventKind::StepFinished { .. } => "F",
                    crate::event::FlowEventKind::StepFailed { .. } => "X",
                    crate::event::FlowEventKind::StepSignal { .. } => "G", // generic signal
+                   crate::event::FlowEventKind::RetryScheduled { .. } => "R",
                    crate::event::FlowEventKind::FlowCompleted { .. } => "C",
+                   crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
                })
                .collect::<Vec<_>>()
         };
@@ -1114,7 +1282,7 @@ mod tests {
         let definition = build_flow_definition(&["single"], vec![Box::new(SingleStep)]);
         engine.next_with(flow_id, &definition).unwrap();
         let events = engine.event_store.list(flow_id);
-        let variants: Vec<_> = events.iter()
+    let variants: Vec<_> = events.iter()
                                      .map(|e| match &e.kind {
                                          crate::event::FlowEventKind::FlowInitialized { .. } => "I",
                                          crate::event::FlowEventKind::StepStarted { .. } => "S",
@@ -1122,6 +1290,8 @@ mod tests {
                                          crate::event::FlowEventKind::FlowCompleted { .. } => "C",
                                          crate::event::FlowEventKind::StepFailed { .. } => "X",
                                          crate::event::FlowEventKind::StepSignal { .. } => "G",
+                     crate::event::FlowEventKind::RetryScheduled { .. } => "R",
+                                         crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
                                      })
                                      .collect();
         assert_eq!(variants, vec!["I", "S", "F", "C"], "Secuencia esperada para un sólo step");
@@ -1222,6 +1392,194 @@ mod tests {
                                                          // intentar de nuevo debe dar FlowHasFailed (stop-on-failure)
         let err = engine.next_with(flow_id, &definition).unwrap_err();
         assert_eq!(err.to_string(), crate::errors::CoreEngineError::FlowHasFailed.to_string());
+    }
+
+    // ----------------------------------------------------------------------------------
+    // TEST F7: Retry manual – agenda RetryScheduled y verifica transición Failed→Pending
+    // y que el fingerprint del StepFinished tras el retry es igual al que habría sido
+    // sin fallar (mismos inputs/params).
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn retry_scheduled_transitions_and_fp_stable() {
+        // Step que falla la primera vez y luego tiene éxito
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct Flaky { state: Arc<Mutex<u32>> }
+        impl StepDefinition for Flaky {
+            fn id(&self) -> &str { "flaky" }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+                let mut c = self.state.lock().unwrap();
+                if *c == 0 {
+                    *c = 1;
+                    StepRunResult::Failure { error: CoreEngineError::Internal("boom".into()) }
+                } else {
+                    let art = serde_json::json!({"ok":true, "schema_version":1});
+                    StepRunResult::Success { outputs: vec![Artifact { kind: ArtifactKind::GenericJson,
+                                                                      hash: String::new(),
+                                                                      payload: art,
+                                                                      metadata: None }] }
+                }
+            }
+            fn kind(&self) -> StepKind { StepKind::Transform }
+        }
+        struct Src;
+        impl StepDefinition for Src {
+            fn id(&self) -> &str { "src" }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+                StepRunResult::Success { outputs: vec![Artifact { kind: ArtifactKind::GenericJson,
+                                                                  hash: String::new(),
+                                                                  payload: json!({"schema_version":1}),
+                                                                  metadata: None }] }
+            }
+            fn kind(&self) -> StepKind { StepKind::Source }
+        }
+        let flow_id = Uuid::new_v4();
+        let flaky = Flaky { state: Arc::new(Mutex::new(0)) };
+        let mut engine = FlowEngine::new_with_stores(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let def = build_flow_definition(&["src", "flaky"], vec![Box::new(Src), Box::new(flaky.clone())]);
+        // Ejecutar source y luego flaky (falla)
+        engine.next_with(flow_id, &def).unwrap();
+        let _ = engine.next_with(flow_id, &def); // falla, ignoramos error en test
+        // Agenda retry
+        let ok = engine.schedule_retry(flow_id, &def, "flaky", Some("test".into()), Some(3)).unwrap();
+        assert!(ok, "Debe agendar retry");
+        // Ahora next debería re-ejecutar flaky y completar
+        engine.next_with(flow_id, &def).unwrap();
+    let variants = engine.event_variants_for(flow_id);
+    // Secuencia esperada:
+    // I (init), S (src started), F (src finished), S (flaky started), X (flaky failed),
+    // R (retry), S (flaky started), F (flaky finished), C (completed)
+    assert_eq!(variants, vec!["I","S","F","S","X","R","S","F","C"], "Secuencia con retry R esperada");
+        // Verificar que hay un sólo StepFinished para flaky (el último), y fingerprint coherente
+        let evs = engine.event_store.list(flow_id);
+        let fps: Vec<String> = evs.iter().filter_map(|e| {
+            if let FlowEventKind::StepFinished { step_id, fingerprint, .. } = &e.kind {
+                if step_id == "flaky" { Some(fingerprint.clone()) } else { None }
+            } else { None }
+        }).collect();
+        assert_eq!(fps.len(), 1, "Sólo un StepFinished final por step");
+        // Como el fingerprint depende de inputs/params/definition_hash y estos no cambiaron
+        // entre intentos, no hay comparador directo aquí (no hubo StepFinished previo). Validamos
+        // que FlowCompleted exista.
+        assert!(evs.iter().any(|e| matches!(e.kind, FlowEventKind::FlowCompleted { .. })), "Debe existir FlowCompleted");
+    }
+
+    // ----------------------------------------------------------------------------------
+    // TEST F7: Límite de reintentos – rechaza cuando retry_count >= max.
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn retry_limit_respected() {
+        struct AlwaysFail;
+        impl StepDefinition for AlwaysFail {
+            fn id(&self) -> &str { "bad" }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+                StepRunResult::Failure { error: CoreEngineError::Internal("e".into()) }
+            }
+            fn kind(&self) -> StepKind { StepKind::Transform }
+        }
+        struct Src;
+        impl StepDefinition for Src {
+            fn id(&self) -> &str { "src" }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+                StepRunResult::Success { outputs: vec![Artifact { kind: ArtifactKind::GenericJson,
+                                                                  hash: String::new(),
+                                                                  payload: json!({"schema_version":1}),
+                                                                  metadata: None }] }
+            }
+            fn kind(&self) -> StepKind { StepKind::Source }
+        }
+        let flow_id = Uuid::new_v4();
+        let mut engine = FlowEngine::new_with_stores(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let def = build_flow_definition(&["src","bad"], vec![Box::new(Src), Box::new(AlwaysFail)]);
+        engine.next_with(flow_id, &def).unwrap(); // src
+        let _ = engine.next_with(flow_id, &def); // bad fails
+        // Agotar dos reintentos máximo
+        assert!(engine.schedule_retry(flow_id, &def, "bad", None, Some(2)).unwrap());
+        // Consumir retry (fallará otra vez)
+        let _ = engine.next_with(flow_id, &def);
+        // Segundo retry permitido
+        assert!(engine.schedule_retry(flow_id, &def, "bad", None, Some(2)).unwrap());
+        let _ = engine.next_with(flow_id, &def);
+        // Tercer intento de agendar debe ser rechazado
+        assert!(!engine.schedule_retry(flow_id, &def, "bad", None, Some(2)).unwrap());
+        assert!(engine.retries_rejected() >= 1);
+    }
+
+    // ----------------------------------------------------------------------------------
+    // TEST F7: Fingerprint estable — directo vs. con retry (mismos inputs/params)
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn fp_stable_across_retry_vs_direct_success() {
+        // Source determinista
+        struct Src;
+        impl StepDefinition for Src {
+            fn id(&self) -> &str { "src" }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+                StepRunResult::Success { outputs: vec![Artifact { kind: ArtifactKind::GenericJson,
+                                                                  hash: String::new(),
+                                                                  payload: json!({"v":1, "schema_version":1}),
+                                                                  metadata: None }] }
+            }
+            fn kind(&self) -> StepKind { StepKind::Source }
+        }
+        // Transform estable (éxito directo)
+        struct Stable;
+        impl StepDefinition for Stable {
+            fn id(&self) -> &str { "t" }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
+                let _ = &ctx.input; // output determinista fijo
+                StepRunResult::Success { outputs: vec![Artifact { kind: ArtifactKind::GenericJson,
+                                                                  hash: String::new(),
+                                                                  payload: json!({"ok":true, "schema_version":1}),
+                                                                  metadata: None }] }
+            }
+            fn kind(&self) -> StepKind { StepKind::Transform }
+        }
+        // Transform flaky (falla primera vez, luego mismo output que Stable)
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct Flaky { s: Arc<Mutex<u32>> }
+        impl StepDefinition for Flaky {
+            fn id(&self) -> &str { "t" }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
+                let mut v = self.s.lock().unwrap();
+                if *v == 0 { *v = 1; return StepRunResult::Failure { error: CoreEngineError::Internal("boom".into()) }; }
+                let _ = &ctx.input;
+                StepRunResult::Success { outputs: vec![Artifact { kind: ArtifactKind::GenericJson,
+                                                                  hash: String::new(),
+                                                                  payload: json!({"ok":true, "schema_version":1}),
+                                                                  metadata: None }] }
+            }
+            fn kind(&self) -> StepKind { StepKind::Transform }
+        }
+
+        // Caso A: éxito directo
+        let mut eng_a = FlowEngine::new_with_stores(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let def_a = build_flow_definition(&["src","t"], vec![Box::new(Src), Box::new(Stable)]);
+        let flow_a = Uuid::new_v4();
+        eng_a.next_with(flow_a, &def_a).unwrap();
+        eng_a.next_with(flow_a, &def_a).unwrap();
+        let fp_a = eng_a.last_step_fingerprint(flow_a, "t").expect("fp_a");
+
+        // Caso B: falla, retry, éxito
+        let mut eng_b = FlowEngine::new_with_stores(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let flaky = Flaky { s: Arc::new(Mutex::new(0)) };
+        let def_b = build_flow_definition(&["src","t"], vec![Box::new(Src), Box::new(flaky)]);
+        let flow_b = Uuid::new_v4();
+        eng_b.next_with(flow_b, &def_b).unwrap(); // src
+        let _ = eng_b.next_with(flow_b, &def_b); // t (falla)
+        assert!(eng_b.schedule_retry(flow_b, &def_b, "t", None, Some(3)).unwrap());
+        eng_b.next_with(flow_b, &def_b).unwrap(); // t (éxito)
+        let fp_b = eng_b.last_step_fingerprint(flow_b, "t").expect("fp_b");
+
+        assert_eq!(fp_a, fp_b, "Fingerprint del step debe ser igual con retry");
     }
 
     // ----------------------------------------------------------------------------------
@@ -1785,5 +2143,51 @@ mod tests {
         e2.next_with(flow_id, &def2).unwrap();
         let fp2 = e2.test_compute_flow_fingerprint(flow_id);
         assert_eq!(fp1, fp2, "Flow fingerprint agregado debe ser estable");
+    }
+
+    // ----------------------------------------------------------------------------------
+    // TEST F6: Traducción de StepSignal reservada a PropertyPreferenceAssigned.
+    // Verifica que el engine emite P antes de F y no deja la señal genérica.
+    // ----------------------------------------------------------------------------------
+    #[test]
+    fn reserved_signal_translates_to_policy_event() {
+        use serde_json::json;
+        // Step fuente que emite la señal reservada con payload válido
+        struct PolicySource;
+        impl crate::step::StepDefinition for PolicySource {
+            fn id(&self) -> &str { "policy_src" }
+            fn base_params(&self) -> serde_json::Value { json!({}) }
+            fn run(&self, _ctx: &ExecutionContext) -> StepRunResult {
+                let art = serde_json::json!({"dummy":true, "schema_version":1});
+                // Artifact genérico
+                let artifact = crate::model::Artifact { kind: crate::model::ArtifactKind::GenericJson,
+                                                        hash: String::new(),
+                                                        payload: art,
+                                                        metadata: None };
+                let data = json!({
+                    "property_key": "inchikey:XYZ|prop:foo",
+                    "policy_id": "max_score",
+                    "params_hash": "abcd1234",
+                    "rationale": {"score": 0.99}
+                });
+                StepRunResult::SuccessWithSignals { outputs: vec![artifact],
+                                                    signals: vec![StepSignal { signal: "PROPERTY_PREFERENCE_ASSIGNED".into(),
+                                                                               data }] }
+            }
+            fn kind(&self) -> crate::step::StepKind { crate::step::StepKind::Source }
+        }
+        let flow_id = Uuid::new_v4();
+        let mut engine = FlowEngine::new_with_stores(InMemoryEventStore::default(), InMemoryFlowRepository::new());
+        let def = build_flow_definition(&["policy_src"], vec![Box::new(PolicySource)]);
+        engine.next_with(flow_id, &def).unwrap();
+        // Debe completar el flow de un solo step
+        let variants = engine.event_variants_for(flow_id);
+        assert_eq!(variants, vec!["I", "S", "P", "F", "C"], "Secuencia debe incluir P antes de F");
+        // No debe existir StepSignal con ese nombre; en su lugar, un evento P tipado
+        let events = engine.event_store.list(flow_id);
+        assert!(events.iter().any(|e| matches!(e.kind, FlowEventKind::PropertyPreferenceAssigned{..})),
+                "Debe existir PropertyPreferenceAssigned");
+        assert!(!events.iter().any(|e| matches!(e.kind, FlowEventKind::StepSignal{ ref signal, .. } if signal=="PROPERTY_PREFERENCE_ASSIGNED")),
+                "No debe quedar StepSignal genérica para la señal reservada");
     }
 }

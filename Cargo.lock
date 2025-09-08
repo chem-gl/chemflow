@@ -391,6 +391,10 @@ version = "0.1.0"
 dependencies = [
  "chem-core",
  "chem-domain",
+ "chem-persistence",
+ "dotenvy",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -451,6 +455,8 @@ version = "0.1.0"
 dependencies = [
  "chem-core",
  "chem-domain",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

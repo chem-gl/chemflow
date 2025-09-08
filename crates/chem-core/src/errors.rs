@@ -20,6 +20,15 @@ pub enum CoreEngineError {
     FirstStepMustBeSource,
     #[error("flow has failed previously (stop-on-failure invariant)")]
     FlowHasFailed,
+    // F7 – Errores de política/estado para reintentos
+    #[error("retry not allowed for step '{step_id}': {reason}")]
+    RetryNotAllowed { step_id: String, reason: String },
+    #[error("invalid transition: {from} -> {to}")]
+    InvalidTransition { from: String, to: String },
+    #[error("policy violation: {0}")]
+    PolicyViolation(String),
+    #[error("storage error: {0}")]
+    StorageError(String),
     #[error("internal: {0}")]
     Internal(String),
 }

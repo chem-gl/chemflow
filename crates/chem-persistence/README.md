@@ -20,7 +20,7 @@ Propósito: lograr durabilidad en Postgres con paridad 1:1 frente al backend en 
 
 Notas:
 
-- `event_type` debe ser minúsculas y pertenece al conjunto {flowinitialized, stepstarted, stepfinished, stepfailed, stepsignal, flowcompleted}.
+- `event_type` debe ser minúsculas y pertenece al conjunto {flowinitialized, stepstarted, stepfinished, stepfailed, stepsignal, propertypreferenceassigned, flowcompleted}. (Añadido en migración 0003)
 - `seq` es append-only y global a la tabla.
 
 ## Comportamiento clave

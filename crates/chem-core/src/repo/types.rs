@@ -26,6 +26,8 @@ pub struct StepSlot {
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub attempts: u32, // (Futuro retries) inicial primera ejecución =1
+    /// Conteo acumulado de reintentos agendados/consumidos (Failed→Pending transiciones).
+    pub retry_count: u32,
 }
 
 /// Trait para reconstruir (`replay`) estado de un flow a partir de eventos.
@@ -74,7 +76,8 @@ impl FlowRepository for InMemoryFlowRepository {
                                                                      outputs: vec![],
                                                                      started_at: None,
                                                                      finished_at: None,
-                                                                     attempts: 0 })
+                                                                     attempts: 0,
+                                                                     retry_count: 0 })
                                                  .collect();
         let mut completed = false;
         for ev in events {
@@ -105,10 +108,34 @@ impl FlowRepository for InMemoryFlowRepository {
                         slot.finished_at = Some(ev.ts);
                     }
                 }
+                // F7: Al rehidratar, aplicar la transición Failed → Pending si
+                // corresponde y aumentar retry_count. El índice del step se
+                // infiere buscando el slot por step_id.
+                FlowEventKind::RetryScheduled { step_id, retry_index, .. } => {
+                    if let Some((idx, slot)) = steps.iter_mut().enumerate().find(|(_, s)| &s.step_id == step_id) {
+                        // Sólo si estaba Failed y el retry_index es consistente (retry_count+1)
+                        if matches!(slot.status, StepStatus::Failed) {
+                            let expected = slot.retry_count + 1;
+                            if *retry_index == expected {
+                                slot.retry_count = *retry_index;
+                                slot.status = StepStatus::Pending;
+                                // Reposicionar cursor si es anterior al índice del step a reintentar
+                                // El cursor se define como el primer Pending; recalcularemos al final.
+                            } else {
+                                // Si el índice no es consistente, ignoramos el evento para mantener invariantes.
+                                let _ = idx; // hint to avoid unused warning
+                            }
+                        }
+                    }
+                }
                 FlowEventKind::FlowCompleted { .. } => completed = true,
                 FlowEventKind::StepSignal { .. } => {}
+                FlowEventKind::PropertyPreferenceAssigned { .. } => {}
             }
         }
+        // Cursor: primer Pending; si no hay, posición = len(). Esto soporta
+        // reintentos: un RetryScheduled marca Pending el step Failed, por lo que
+        // el cursor vuelve a ese índice.
         let cursor = steps.iter()
                           .position(|s| matches!(s.status, StepStatus::Pending))
                           .unwrap_or(steps.len());

@@ -1,5 +1,3 @@
-use chem_persistence::config::DbConfig;
-use chem_persistence::pg::build_pool;
 mod test_support;
 use diesel::prelude::*;
 use test_support::with_pool;

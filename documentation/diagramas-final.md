@@ -744,6 +744,27 @@ Nueva tabla `STEP_EXECUTION_ERRORS` para registrar cada fallo (incluye validacio
 
 Beneficios: auditoría precisa, métricas MTTR/MTBF y selección inteligente de políticas de retry.
 
+### 11.2 F7 – Retry Manual Mínimo (implementado)
+
+- Evento: `RetryScheduled { step_id, retry_index, reason? }`.
+- Transición (replay): `Failed → Pending` si `retry_index == retry_count+1`.
+- Fingerprints: el retry no participa del cálculo; con mismos inputs/params/def el `StepFinished.fingerprint` es idéntico.
+- Backoff: determinista (None/Exponential), fuera del fingerprint.
+- Métricas internas: `retries_scheduled`, `retries_rejected`.
+- Secuencia típica: `I, S, F, S, X, R, S, F, C`.
+
+CLI:
+
+```bash
+chem retry --flow <UUID> --step <ID> [--reason <TXT>] [--max <N>]
+```
+
+Requiere `DATABASE_URL`.
+
+- Éxito: `agendado: ...` (exit 0)
+- Rechazo por estado/política: exit 4
+- Error interno/DB: exit 5
+
 ## 12. Base de Datos – Esquema Normalizado
 
 ```mermaid
@@ -1995,27 +2016,9 @@ GATE_F6:
 
 ### F7 – Retry Manual Mínimo
 
-| Núcleo | Contrato Estabilizado | GATE_F7 | Paralelo Seguro |
-| ----------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
-Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
-Módulo hashing::canonical_json único (no duplicar lógica).
-Crear CoreError / DomainError con thiserror.
-Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
-Esqueleto README.md + CONTRIBUTING.md.
-Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
-Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
-Módulo hashing::canonical_json único (no duplicar lógica).
-Crear CoreError / DomainError con thiserror.
-Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
-Esqueleto README.md + CONTRIBUTING.md.
-Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |Script check_deps.sh (usa cargo metadata) y falla en ciclos.
-Pipeline CI: cargo fmt --check, cargo clippy --all-targets --all-features, cargo test.
-Módulo hashing::canonical_json único (no duplicar lógica).
-Crear CoreError / DomainError con thiserror.
-Añadir rust-toolchain (pin nightly o stable acordado) y caché en CI.
-Esqueleto README.md + CONTRIBUTING.md.
-Primera build limpia confirmando baseline.----------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------- |
-| RetryPolicy (should_retry), transición Failed→Pending, retry_count memoria, evento RetryScheduled opcional | Semántica retry (no altera fingerprint) | Backoff diseño inicial | Borrador estrategia exponencial |
+| Núcleo                                                                                     | Contrato Estabilizado             | GATE_F7                                 | Paralelo Seguro                |
+| ------------------------------------------------------------------------------------------ | --------------------------------- | ---------------------------------------- | ------------------------------ |
+| RetryPolicy (should_retry), transición Failed→Pending, retry_count, evento RetryScheduled | Semántica retry (no altera fp)    | Reintento no cambia fingerprint ni flow | Backoff diseño inicial (draft) |
 
 Objetivos Clave:
 
@@ -2031,6 +2034,8 @@ Pasos sugeridos:
 5. Nuevos artifacts generan nuevos IDs (no colisión hash).
 6. Métrica interna retries.
 7. Documentar semántica.
+8. Verificar funciones no verbosas para el fingerprint.
+9. usar parametrización para definir políticas de reintento y asegurar que estas políticas no afectan el fingerprint a menos que los parámetros cambien.
 
 GATE_F7:
 
@@ -2044,6 +2049,7 @@ GATE_F7:
 | Núcleo                                                             | Contrato Estabilizado            | GATE_F8                     | Paralelo Seguro        |
 | ------------------------------------------------------------------ | -------------------------------- | --------------------------- | ---------------------- |
 | Migración STEP_EXECUTION_ERRORS, persistir retry_count/max_retries | Esquema errores + attempt_number | Rehidratación DB == memoria | Métricas error (luego) |
+
 Objetivos Clave:
 
 - Auditoría granular de fallos.

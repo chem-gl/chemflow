@@ -20,4 +20,12 @@ if [ -f ".env" ]; then
     fi
 fi
 
+# Mitigación opcional para libpq+GSS: si DATABASE_URL no especifica gssencmode y PGGSSENCMODE no está seteado, deshabilitar GSS
+if [ -n "${DATABASE_URL:-}" ]; then
+    if [ -z "${PGGSSENCMODE:-}" ] && ! echo "$DATABASE_URL" | grep -qi 'gssencmode='; then
+        export PGGSSENCMODE=disable
+        echo "[run.sh] PGGSSENCMODE=disable (auto)"
+    fi
+fi
+
 cargo run "$@"

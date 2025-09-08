@@ -1,3 +1,112 @@
+/// Validación F7: Retry manual mínimo, schedule_retry, eventos y replay.
+fn run_f7_validation() {
+    use chem_core::{FlowEngine, build_flow_definition};
+    use chem_core::repo::FlowRepository;
+    use chem_core::step::{StepDefinition, StepKind, StepRunResult};
+    use chem_core::event::FlowEventKind;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // Step Source dummy para inicializar el flujo
+    struct DummySource;
+    impl StepDefinition for DummySource {
+        fn id(&self) -> &str { "src" }
+        fn kind(&self) -> StepKind { StepKind::Source }
+        fn run(&self, _ctx: &chem_core::model::ExecutionContext) -> StepRunResult {
+            // Return a minimal artifact so downstream transform steps have an input.
+            let art = chem_core::model::Artifact {
+                kind: chem_core::model::ArtifactKind::GenericJson,
+                hash: String::new(),
+                payload: serde_json::json!({ "schema_version": 1 }),
+                metadata: None,
+            };
+            StepRunResult::Success { outputs: vec![art] }
+        }
+        fn base_params(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn name(&self) -> &str { "src" }
+    }
+
+    // Step F7 que falla la primera vez y luego pasa (comparte un flag)
+    struct F7Step {
+        id: &'static str,
+        failed_once: Rc<RefCell<bool>>,
+    }
+    impl F7Step {
+        fn new_with_flag(id: &'static str, flag: Rc<RefCell<bool>>) -> Self {
+            Self { id, failed_once: flag }
+        }
+        fn new(id: &'static str) -> Self {
+            Self { id, failed_once: Rc::new(RefCell::new(false)) }
+        }
+    }
+    impl StepDefinition for F7Step {
+        fn id(&self) -> &str { self.id }
+        fn kind(&self) -> StepKind { StepKind::Transform }
+        fn run(&self, _ctx: &chem_core::model::ExecutionContext) -> StepRunResult {
+            let mut failed = self.failed_once.borrow_mut();
+            if !*failed {
+                *failed = true;
+                return StepRunResult::Failure { error: chem_core::errors::CoreEngineError::Internal("Fallo intencional F7".into()) };
+            }
+            StepRunResult::Success { outputs: vec![] }
+        }
+        fn base_params(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn name(&self) -> &str { self.id }
+    }
+
+    // Flag compartido entre instancias de F7Step
+    let shared_flag = Rc::new(RefCell::new(false));
+    let def = build_flow_definition(
+        &["src", "f7step"],
+        vec![Box::new(DummySource), Box::new(F7Step::new_with_flag("f7step", shared_flag.clone()))]
+    );
+    let mut engine = FlowEngine::new_with_stores(
+        chem_core::event::InMemoryEventStore::default(),
+        chem_core::repo::InMemoryFlowRepository::new()
+    );
+    let flow_id = engine.ensure_default_flow_id();
+
+    // Ejecutar: primero se ejecuta el Source, luego el step F7 que debe fallar
+    let r_src = engine.next_with(flow_id, &def);
+    assert!(r_src.is_ok(), "F7: el Source debe ejecutarse OK primero");
+    // Ahora ejecutar el step que falla la primera vez
+    let _res1 = engine.next_with(flow_id, &def);
+    let events1 = engine.events().unwrap();
+    let has_failed = events1.iter().any(|e| matches!(e.kind, FlowEventKind::StepFailed { .. }));
+    assert!(has_failed, "F7: Debe haber StepFailed en eventos");
+
+    // Schedule retry manual (simula CLI):
+    let retry_reason = Some("retry test".to_string());
+    let def_for_retry = build_flow_definition(
+        &["src", "f7step"],
+        vec![Box::new(DummySource), Box::new(F7Step::new_with_flag("f7step", shared_flag.clone()))]
+    );
+    let retry_res = engine.schedule_retry(flow_id, &def_for_retry, "f7step", retry_reason.clone(), Some(1));
+    let def_for_load = build_flow_definition(
+        &["src", "f7step"],
+        vec![Box::new(DummySource), Box::new(F7Step::new_with_flag("f7step", shared_flag.clone()))]
+    );
+    assert!(retry_res.is_ok(), "F7: schedule_retry debe funcionar");
+    let events2 = engine.events().unwrap();
+    let has_retry = events2.iter().any(|e| matches!(e.kind, FlowEventKind::RetryScheduled { .. }));
+    assert!(has_retry, "F7: Debe haber RetryScheduled en eventos");
+
+    // Ejecutar de nuevo: debe pasar ahora
+    let res2 = engine.next_with(flow_id, &def);
+    assert!(res2.is_ok(), "F7: El step debe pasar tras el retry");
+    let events3 = engine.events().unwrap();
+    let finished = events3.iter().any(|e| matches!(e.kind, FlowEventKind::StepFinished { .. }));
+    assert!(finished, "F7: Debe haber StepFinished tras retry");
+
+    // Replay: reconstruir el estado y verificar que el step está FinishedOk
+    let events = engine.events().unwrap();
+    let instance = chem_core::repo::InMemoryFlowRepository::new().load(flow_id, &events, &def_for_load);
+    let slot = &instance.steps[1];
+    assert_eq!(slot.status, chem_core::step::StepStatus::FinishedOk, "F7: Step debe estar FinishedOk tras retry");
+    assert_eq!(slot.retry_count, 1, "F7: retry_count debe ser 1 tras un retry");
+
+    println!("!Validación F7: OK (retry manual, eventos y replay)");
+}
 
 use chem_domain::Molecule;
 use chem_core::step::StepKind;
@@ -11,6 +120,8 @@ use chem_adapters::steps::compute::ComputePropertiesStep;
 use chem_adapters::encoder::{DomainArtifactEncoder, SimpleDomainEncoder};
 use chem_domain::MoleculeFamily;
 use serde_json::to_string_pretty;
+use uuid::Uuid;
+use chem_adapters::steps::policy_demo::PolicyDemoStep;
 
 // --------------------
 // Artifactos tipados
@@ -81,6 +192,8 @@ typed_step! {
 }
 
 fn main() {
+    // Cargar variables de entorno desde .env si existe (antes de leer DATABASE_URL)
+    let _ = dotenvy::dotenv();
     //uso ejemplo de Tarea 1
     // Ejemplo de creación de moléculas usando SMILES
     let smiles_benzene = "C1=CC=CC=C1"; // Benceno
@@ -136,8 +249,12 @@ fn main() {
         println!("Cantidad de letras: {}", out.inner.count);
     }
     println!("!Validación F2: OK (flujo ejecutado y completado determinísticamente)");
-    // validacion del flujo 3
-    maybe_run_pg_demo();
+    // validacion del flujo 3 (PG demo) – opt-in to avoid libpq/GSS crashes on some setups
+    if std::env::var("CHEMFLOW_RUN_PG_DEMO").ok().as_deref() == Some("1") {
+        maybe_run_pg_demo();
+    } else {
+        eprintln!("[PG DEMO] Skipping (set CHEMFLOW_RUN_PG_DEMO=1 to enable)");
+    }
     // validacion del flujo 4
     println!("--- Iniciando validación F4 ---");
     {
@@ -170,8 +287,60 @@ fn main() {
     }
     println!("--- Iniciando validación F5 ---");
     run_f5_lowlevel();
+     println!("--- Iniciando validación F6 ---");
+    if let Err(e) = run_f6_validation() {
+        eprintln!("[F6] Error: {e}");
+    } else {
+        println!("[F6] Validación OK");
+    }
+    println!("--- Iniciando validación F7 ---");
+    run_f7_validation();
+}
+// Fuente mínima que emite un artifact compatible con DummyIn (policy_demo)
+struct F6Seed;
+impl chem_core::step::StepDefinition for F6Seed {
+    fn id(&self) -> &str { "f6_seed" }
+    fn base_params(&self) -> serde_json::Value { serde_json::json!({}) }
+    fn run(&self, _ctx: &chem_core::model::ExecutionContext) -> chem_core::step::StepRunResult {
+        let art = chem_core::model::Artifact { kind: chem_core::model::ArtifactKind::GenericJson,
+                                               hash: String::new(),
+                                               payload: serde_json::json!({"v":1, "schema_version":1}),
+                                               metadata: None };
+        chem_core::step::StepRunResult::Success { outputs: vec![art] }
+    }
+    fn kind(&self) -> chem_core::step::StepKind { chem_core::step::StepKind::Source }
+}
 
-
+fn run_f6_validation() -> Result<(), String> {
+    // Construir flujo: F6Seed (Source) -> PolicyDemoStep (Transform)
+    let mut engine = FlowEngine::new_with_stores(chem_core::InMemoryEventStore::default(),
+                                                 chem_core::InMemoryFlowRepository::new());
+    let steps: Vec<Box<dyn chem_core::StepDefinition>> = vec![Box::new(F6Seed), Box::new(PolicyDemoStep::new())];
+    let def = chem_core::repo::build_flow_definition(&["f6_seed", "policy_demo"], steps);
+    let flow_id = Uuid::new_v4();
+    engine.next_with(flow_id, &def).map_err(|e| e.to_string())?; // f6_seed
+    engine.next_with(flow_id, &def).map_err(|e| e.to_string())?; // policy_demo
+    // Verificar orden alrededor del step "policy_demo": Started -> P -> Finished
+    let events = engine.events_for(flow_id);
+    let idx_started = events.iter().enumerate().find_map(|(i, e)| match &e.kind {
+        chem_core::FlowEventKind::StepStarted { step_id, .. } if step_id == "policy_demo" => Some(i),
+        _ => None,
+    }).ok_or_else(|| "no StepStarted(policy_demo)".to_string())?;
+    let idx_finished = events.iter().enumerate().rev().find_map(|(i, e)| match &e.kind {
+        chem_core::FlowEventKind::StepFinished { step_id, .. } if step_id == "policy_demo" => Some(i),
+        _ => None,
+    }).ok_or_else(|| "no StepFinished(policy_demo)".to_string())?;
+    let idx_p = events.iter().enumerate().find_map(|(i, e)| match &e.kind {
+        chem_core::FlowEventKind::PropertyPreferenceAssigned { .. } if i > idx_started => Some(i),
+        _ => None,
+    }).ok_or_else(|| "no se emitió evento P".to_string())?;
+    if !(idx_started < idx_p && idx_p < idx_finished) {
+        return Err("evento P debe ocurrir entre StepStarted y StepFinished de policy_demo".into());
+    }
+    // No debe existir StepSignal genérica con la señal reservada
+    let had_reserved_signal = events.iter().any(|e| matches!(e.kind, chem_core::FlowEventKind::StepSignal { ref signal, .. } if signal=="PROPERTY_PREFERENCE_ASSIGNED"));
+    if had_reserved_signal { return Err("Se encontró StepSignal genérica para señal reservada".into()); }
+    Ok(())
 }
 mod pg_persistence_demo {
     use super::*;
@@ -268,6 +437,17 @@ mod pg_persistence_demo {
 }
 
 fn maybe_run_pg_demo() {
+    // Ejecutar sólo si hay DATABASE_URL y aplicar mitigación para GSS por defecto.
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        // Si no hay gssencmode en la URL y el env no está seteado, deshabilitar GSS para evitar aborts en entornos con libpq+GSS.
+        if !url.to_lowercase().contains("gssencmode=") && std::env::var("PGGSSENCMODE").is_err() {
+            std::env::set_var("PGGSSENCMODE", "disable");
+            eprintln!("[PG DEMO] PGGSSENCMODE=disable (auto) to evitar issues GSS/libpq");
+        }
+    } else {
+        eprintln!("[PG DEMO] DATABASE_URL no definido; omitiendo demos PG");
+        return;
+    }
     if let Err(e) = pg_persistence_demo::run() {
         eprintln!("[PG DEMO] Error (basic): {e:?}");
     }
@@ -281,6 +461,9 @@ fn run_f5_lowlevel() {
     // Bring the trait for repo.load into scope
     use chem_core::repo::FlowRepository;
 
+    // Asegura cargar .env si aún no se cargó en este contexto
+    let _ = dotenvy::dotenv();
+
     // Ejecutar sólo si hay DATABASE_URL definido
     if std::env::var("DATABASE_URL").is_err() {
         eprintln!("[F5] DATABASE_URL no definido; omitiendo ejemplo F5");
@@ -291,8 +474,9 @@ fn run_f5_lowlevel() {
     // si observas errores de k5_mutex en teardown.
     if let Ok(url) = std::env::var("DATABASE_URL") {
         let gssen_env = std::env::var("PGGSSENCMODE").unwrap_or_default();
-        if !url.contains("gssencmode=") && gssen_env.is_empty() {
-            eprintln!("[F5] Sugerencia: si observas k5_mutex_lock al finalizar, prueba gssencmode=disable (libpq+GSS)");
+        if !url.to_lowercase().contains("gssencmode=") && gssen_env.is_empty() {
+            std::env::set_var("PGGSSENCMODE", "disable");
+            eprintln!("[F5] PGGSSENCMODE=disable (auto) para evitar issues GSS/libpq; añade gssencmode=disable a DATABASE_URL si prefieres");
         }
     }
     // 1) Pool + provider
@@ -332,6 +516,8 @@ fn run_f5_lowlevel() {
             chem_core::FlowEventKind::StepFinished { .. } => "F",
             chem_core::FlowEventKind::StepFailed { .. } => "X",
             chem_core::FlowEventKind::StepSignal { .. } => "G",
+            chem_core::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
+            chem_core::FlowEventKind::RetryScheduled { .. } => "R",
             chem_core::FlowEventKind::FlowCompleted { .. } => "C",
         })
         .collect();

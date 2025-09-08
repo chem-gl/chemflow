@@ -24,6 +24,7 @@ fn roundtrip_all_variants_enum_json_full() {
         FlowEventKind::StepSignal { step_index: 0, step_id: "s0".into(), signal: "ping".into(), data: Value::Null },
         FlowEventKind::StepFinished { step_index: 0, step_id: "s0".into(), outputs: vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()], fingerprint: "fp0".into() },
         FlowEventKind::StepFailed { step_index: 1, step_id: "s1".into(), error: chem_core::errors::CoreEngineError::Internal("boom".into()), fingerprint: "fp1".into() },
+    FlowEventKind::PropertyPreferenceAssigned { property_key: "k1".into(), policy_id: "max_score".into(), params_hash: "h123".into(), rationale: Value::Null },
         FlowEventKind::FlowCompleted { flow_fingerprint: "flowfp".into() },
     ];
 

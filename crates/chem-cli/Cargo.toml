@@ -10,3 +10,7 @@ path = "src/main.rs"
 [dependencies]
 chem-core = { path = "../chem-core" }
 chem-domain = { path = "../chem-domain" }
+uuid = { version = "1.8", features = ["v4", "serde"] }
+chem-persistence = { path = "../chem-persistence" }
+dotenvy = "0.15"
+serde_json = "1.0"

@@ -175,6 +175,8 @@ fn event_type_for(kind: &FlowEventKind) -> &'static str {
         FlowEventKind::StepFinished { .. } => "stepfinished",
         FlowEventKind::StepFailed { .. } => "stepfailed",
         FlowEventKind::StepSignal { .. } => "stepsignal",
+    FlowEventKind::PropertyPreferenceAssigned { .. } => "propertypreferenceassigned",
+    FlowEventKind::RetryScheduled { .. } => "retryscheduled",
         FlowEventKind::FlowCompleted { .. } => "flowcompleted",
     }
 }
@@ -294,6 +296,8 @@ fn kind_variant_name(kind: &FlowEventKind) -> &'static str {
         FlowEventKind::StepFinished { .. } => "StepFinished",
         FlowEventKind::StepFailed { .. } => "StepFailed",
         FlowEventKind::StepSignal { .. } => "StepSignal",
+    FlowEventKind::PropertyPreferenceAssigned { .. } => "PropertyPreferenceAssigned",
+    FlowEventKind::RetryScheduled { .. } => "RetryScheduled",
         FlowEventKind::FlowCompleted { .. } => "FlowCompleted",
     }
 }
