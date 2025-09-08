@@ -295,6 +295,52 @@ fn main() {
     }
     println!("--- Iniciando validación F7 ---");
     run_f7_validation();
+    println!("--- iniciando validación F8 ---");
+    if let Err(e) = run_f8_validation() {
+        eprintln!("[F8] Error: {e}");
+    } else {
+        println!("[F8] Validación OK");
+    }
+    
+}
+/// Demo/validation for F8: append a StepFailed and verify errors persisted in `step_execution_errors`.
+fn run_f8_validation() -> Result<(), String> {
+    // Require DATABASE_URL (we run migrations via pool builder)
+    if std::env::var("DATABASE_URL").is_err() {
+        return Err("DATABASE_URL not set; cannot run F8 demo".into());
+    }
+
+    // Build pool and stores
+    let pool = chem_persistence::build_dev_pool_from_env().map_err(|e| e.to_string())?;
+    let provider = PoolProvider { pool };
+    let mut store = PgEventStore::new(provider);
+
+    use chem_core::{EventStore, FlowEventKind};
+
+    let flow_id = Uuid::new_v4();
+
+    // Create a StepFailed event; PgEventStore will persist the error row in the same transaction.
+    let err = chem_core::errors::CoreEngineError::Internal("demo f8 internal".to_string());
+    let kind = FlowEventKind::StepFailed {
+        step_index: 0,
+        step_id: "f8_step".to_string(),
+        error: err.clone(),
+        fingerprint: "fp_f8_demo".to_string(),
+    };
+    let _ev = store.append_kind(flow_id, kind);
+
+    // Query persisted errors and print them
+    let errors = store.list_errors(flow_id);
+    if errors.is_empty() {
+        return Err("no errors persisted for flow".into());
+    }
+    println!("[F8] persisted errors: {}", errors.len());
+    for e in errors.iter() {
+        println!("[F8] id={} flow_id={} step_id={} attempt={} class={} ts={} details={:?}",
+                 e.id, e.flow_id, e.step_id, e.attempt_number, e.error_class, e.ts, e.details);
+    }
+
+    Ok(())
 }
 // Fuente mínima que emite un artifact compatible con DummyIn (policy_demo)
 struct F6Seed;
