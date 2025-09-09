@@ -20,6 +20,8 @@ pub enum CoreEngineError {
     FirstStepMustBeSource,
     #[error("flow has failed previously (stop-on-failure invariant)")]
     FlowHasFailed,
+    #[error("invalid branch source: step must be FinishedOk")]
+    InvalidBranchSource,
     // F7 – Errores de política/estado para reintentos
     #[error("retry not allowed for step '{step_id}': {reason}")]
     RetryNotAllowed { step_id: String, reason: String },
@@ -46,6 +48,6 @@ pub enum ErrorClass {
 pub fn classify_error(error: &CoreEngineError) -> ErrorClass {
     match error {
         CoreEngineError::Internal(_) | CoreEngineError::StorageError(_) => ErrorClass::Runtime,
-        CoreEngineError::InvalidStepIndex | CoreEngineError::MissingInputs | CoreEngineError::FirstStepMustBeSource | CoreEngineError::StepAlreadyTerminal | CoreEngineError::FlowCompleted | CoreEngineError::FlowHasFailed | CoreEngineError::RetryNotAllowed { .. } | CoreEngineError::InvalidTransition { .. } | CoreEngineError::PolicyViolation(_) => ErrorClass::Validation,
+    CoreEngineError::InvalidStepIndex | CoreEngineError::MissingInputs | CoreEngineError::FirstStepMustBeSource | CoreEngineError::StepAlreadyTerminal | CoreEngineError::FlowCompleted | CoreEngineError::FlowHasFailed | CoreEngineError::InvalidBranchSource | CoreEngineError::RetryNotAllowed { .. } | CoreEngineError::InvalidTransition { .. } | CoreEngineError::PolicyViolation(_) => ErrorClass::Validation,
     }
 }

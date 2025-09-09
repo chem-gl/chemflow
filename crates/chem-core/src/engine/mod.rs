@@ -570,6 +570,7 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
                 FlowEventKind::StepSignal { .. } => "G",
                 FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
                 FlowEventKind::RetryScheduled { .. } => "R",
+                FlowEventKind::BranchCreated { .. } => "B",
                 FlowEventKind::FlowCompleted { .. } => "C",
             })
             .collect()
@@ -748,6 +749,73 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
     pub fn retries_scheduled(&self) -> u64 { self.retries_scheduled }
     /// Métricas internas (F7): cantidad de reintentos rechazados.
     pub fn retries_rejected(&self) -> u64 { self.retries_rejected }
+
+    /// Crea una rama (branch) a partir del estado actual del `flow_id` en el
+    /// step `from_step_id` especificado. Reglas (simplificadas para F9):
+    /// - Sólo se permite branch sobre steps con estado `FinishedOk`.
+    /// - Genera un `branch_id` (UUID) y emite un evento `BranchCreated` con
+    ///   metadatos mínimos. El `divergence_params_hash` es opcional y puede ser
+    ///   calculado por capas superiores.
+    /// - No replica ni duplica eventos futuros; simplemente registra la rama
+    ///   y su evento para auditoría.
+    pub fn branch(&mut self,
+                  flow_id: Uuid,
+                  definition: &FlowDefinition,
+                  from_step_id: &str,
+                  divergence_params_hash: Option<String>) -> Result<Uuid, CoreEngineError> {
+        let instance = self.load_or_init(flow_id, definition);
+        // Buscar índice del step por id
+        let idx_opt = instance.steps.iter().position(|s| s.step_id == from_step_id);
+        let idx = match idx_opt { Some(i) => i, None => return Err(CoreEngineError::InvalidStepIndex) };
+        let slot = &instance.steps[idx];
+        if !matches!(slot.status, StepStatus::FinishedOk) {
+            return Err(CoreEngineError::InvalidBranchSource);
+        }
+        // Generar id de rama y root flow id (por ahora usamos flow_id como root)
+        let branch_id = Uuid::new_v4();
+        let root_flow_id = flow_id; // en ausencia de tabla root detection, use flow_id como root
+
+        // Clon parcial: copiar eventos hasta el StepFinished que corresponde a `from_step_id`
+        // Esto crea un nuevo flujo (branch_id) que contiene el histórico hasta ese paso.
+        let events = self.event_store.list(flow_id);
+        // Encontrar último índice de evento StepFinished para from_step_id
+        let mut last_idx: Option<usize> = None;
+        for (i, e) in events.iter().enumerate() {
+            if let FlowEventKind::StepFinished { step_id, .. } = &e.kind {
+                if step_id == from_step_id {
+                    last_idx = Some(i);
+                }
+            }
+        }
+        // Si no encontramos un StepFinished para el step (aunque el slot indica FinishedOk), fallback: copy up to FlowInitialized
+        let copy_up_to = match last_idx {
+            Some(i) => i + 1, // inclusive
+            None => {
+                // try to copy at least FlowInitialized if present
+                if events.iter().any(|e| matches!(e.kind, FlowEventKind::FlowInitialized { .. })) {
+                    1
+                } else { 0 }
+            }
+        };
+
+        if copy_up_to > 0 {
+            for ev in events.into_iter().take(copy_up_to) {
+                // append_kind consumes a FlowEventKind, so clone the kind
+                self.event_store.append_kind(branch_id, ev.kind.clone());
+            }
+        }
+
+        // Emitir BranchCreated en el flujo padre (persistencia insertará metadata en workflow_branches)
+        self.event_store.append_kind(flow_id,
+                                     FlowEventKind::BranchCreated {
+                                         branch_id,
+                                         parent_flow_id: flow_id,
+                                         root_flow_id,
+                                         created_from_step_id: from_step_id.to_string(),
+                                         divergence_params_hash,
+                                     });
+        Ok(branch_id)
+    }
 }
 
 // -------------------------------------------------------------
@@ -1126,9 +1194,10 @@ mod tests {
                 crate::event::FlowEventKind::StepFinished { .. } => "StepFinished",
                 crate::event::FlowEventKind::StepFailed { .. } => "StepFailed",
                 crate::event::FlowEventKind::StepSignal { .. } => "StepSignal",
-                crate::event::FlowEventKind::RetryScheduled { .. } => "RetryScheduled",
-        crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "PropertyPreferenceAssigned",
-                crate::event::FlowEventKind::FlowCompleted { .. } => "FlowCompleted",
+        crate::event::FlowEventKind::RetryScheduled { .. } => "RetryScheduled",
+    crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "PropertyPreferenceAssigned",
+        crate::event::FlowEventKind::BranchCreated { .. } => "BranchCreated",
+        crate::event::FlowEventKind::FlowCompleted { .. } => "FlowCompleted",
             }.to_string()
         }
         let seq1: Vec<String> = events_run1.iter().map(|e| simplify(&e.kind)).collect();
@@ -1199,8 +1268,9 @@ mod tests {
                    crate::event::FlowEventKind::StepFailed { .. } => "X",
                    crate::event::FlowEventKind::StepSignal { .. } => "G", // generic signal
                    crate::event::FlowEventKind::RetryScheduled { .. } => "R",
-                   crate::event::FlowEventKind::FlowCompleted { .. } => "C",
-                   crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
+                       crate::event::FlowEventKind::BranchCreated { .. } => "B",
+                       crate::event::FlowEventKind::FlowCompleted { .. } => "C",
+                       crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
                })
                .collect::<Vec<_>>()
         };
@@ -1287,6 +1357,7 @@ mod tests {
                                          crate::event::FlowEventKind::FlowInitialized { .. } => "I",
                                          crate::event::FlowEventKind::StepStarted { .. } => "S",
                                          crate::event::FlowEventKind::StepFinished { .. } => "F",
+                                         crate::event::FlowEventKind::BranchCreated { .. } => "B",
                                          crate::event::FlowEventKind::FlowCompleted { .. } => "C",
                                          crate::event::FlowEventKind::StepFailed { .. } => "X",
                                          crate::event::FlowEventKind::StepSignal { .. } => "G",

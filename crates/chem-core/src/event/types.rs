@@ -60,6 +60,16 @@ pub enum FlowEventKind {
         /// Rationale serializado en JSON canónico (además puede existir forma tipada en capas superiores).
         rationale: serde_json::Value,
     },
+    /// Evento que representa la creación de una rama (branch) a partir de un
+    /// `parent_flow` y un step concreto. Contiene un `divergence_params_hash`
+    /// que resume los parámetros que divergen en la nueva rama.
+    BranchCreated {
+        branch_id: Uuid,
+        parent_flow_id: Uuid,
+        root_flow_id: Uuid,
+        created_from_step_id: String,
+        divergence_params_hash: Option<String>,
+    },
     /// F7: Evento que agenda un reintento manual para un `step_id` que está en
     /// estado Failed. No altera el fingerprint ni introduce efectos laterales
     /// por sí mismo; su efecto se aplica en el replay del repositorio

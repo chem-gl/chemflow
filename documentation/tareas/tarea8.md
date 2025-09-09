@@ -130,7 +130,7 @@ flowchart LR
 		K --> L[PgEventStore::list_errorsflow_id returns ErrorRow records]
 		L --> M[Tests inspect details JSON and classification]
 
-s
+
 ```
 
 ## Checklist de cobertura vs. `tarea8.txt`

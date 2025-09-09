@@ -218,6 +218,7 @@ fn event_type_for(kind: &FlowEventKind) -> &'static str {
         FlowEventKind::StepSignal { .. } => "stepsignal",
     FlowEventKind::PropertyPreferenceAssigned { .. } => "propertypreferenceassigned",
     FlowEventKind::RetryScheduled { .. } => "retryscheduled",
+    FlowEventKind::BranchCreated { .. } => "branchcreated",
         FlowEventKind::FlowCompleted { .. } => "flowcompleted",
     }
 }
@@ -318,6 +319,19 @@ impl<P: ConnectionProvider> EventStore for PgEventStore<P> {
                             .execute(tx_conn)?;
                     }
 
+                    // Paso 4: insertar metadata de rama si es BranchCreated (F9)
+                    if let FlowEventKind::BranchCreated { branch_id, parent_flow_id, root_flow_id, created_from_step_id, divergence_params_hash } = &kind {
+                        // Tabla workflow_branches (branch_id PK)
+                        // Insert minimal row; metadata puede incluir nombre y JSON adicional más tarde.
+                        diesel::sql_query("INSERT INTO workflow_branches (branch_id, root_flow_id, parent_flow_id, created_from_step_id, divergence_params_hash, created_at) VALUES ($1, $2, $3, $4, $5, now()) ON CONFLICT DO NOTHING")
+                            .bind::<diesel::sql_types::Uuid, _>(*branch_id)
+                            .bind::<diesel::sql_types::Uuid, _>(*root_flow_id)
+                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(Some(*parent_flow_id))
+                            .bind::<diesel::sql_types::Text, _>(created_from_step_id.clone())
+                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(divergence_params_hash.clone())
+                            .execute(tx_conn)?;
+                    }
+
                     Ok::<(i64, DateTime<Utc>), diesel::result::Error>((seq, ts))
                 })
                 .map_err(PersistenceError::from)
@@ -383,6 +397,7 @@ fn kind_variant_name(kind: &FlowEventKind) -> &'static str {
         FlowEventKind::StepSignal { .. } => "StepSignal",
     FlowEventKind::PropertyPreferenceAssigned { .. } => "PropertyPreferenceAssigned",
     FlowEventKind::RetryScheduled { .. } => "RetryScheduled",
+    FlowEventKind::BranchCreated { .. } => "BranchCreated",
         FlowEventKind::FlowCompleted { .. } => "FlowCompleted",
     }
 }

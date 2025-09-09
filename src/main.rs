@@ -564,6 +564,7 @@ fn run_f5_lowlevel() {
             chem_core::FlowEventKind::StepSignal { .. } => "G",
             chem_core::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
             chem_core::FlowEventKind::RetryScheduled { .. } => "R",
+            chem_core::FlowEventKind::BranchCreated { .. } => "B",
             chem_core::FlowEventKind::FlowCompleted { .. } => "C",
         })
         .collect();

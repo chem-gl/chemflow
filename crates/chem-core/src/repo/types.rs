@@ -130,6 +130,7 @@ impl FlowRepository for InMemoryFlowRepository {
                 }
                 FlowEventKind::FlowCompleted { .. } => completed = true,
                 FlowEventKind::StepSignal { .. } => {}
+                FlowEventKind::BranchCreated { .. } => {}
                 FlowEventKind::PropertyPreferenceAssigned { .. } => {}
             }
         }
