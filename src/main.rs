@@ -301,8 +301,20 @@ fn main() {
     } else {
         println!("[F8] Validación OK");
     }
-    
-}
+    println!("--- Iniciando validación F9 ---");
+    run_f9_validation();
+    println!("--- Iniciando validación F10 ---");
+    // Demo / ejemplo de uso para F10: Inyección compuesta + Human Gate
+    // Muestra cómo registrar injectores, ejecutar un flujo y (esquemáticamente)
+    // reanudar una interacción humana con `resume_user_input`.
+    // Nota: este ejemplo es intencionalmente compacto y didáctico; adapta los
+    // pasos concretos del StepDefinition según la semántica de tu proyecto.
+    if let Err(e) = run_f10_example() {
+        eprintln!("[F10] Error demo: {e}");
+    } else {
+        println!("[F10] Demo ejecutado (ver salidas)");
+    }
+ }
 /// Demo/validation for F8: append a StepFailed and verify errors persisted in `step_execution_errors`.
 fn run_f8_validation() -> Result<(), String> {
     // Require DATABASE_URL (we run migrations via pool builder)
@@ -565,6 +577,8 @@ fn run_f5_lowlevel() {
             chem_core::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
             chem_core::FlowEventKind::RetryScheduled { .. } => "R",
             chem_core::FlowEventKind::BranchCreated { .. } => "B",
+            chem_core::FlowEventKind::UserInteractionRequested { .. } => "U",
+            chem_core::FlowEventKind::UserInteractionProvided { .. } => "V",
             chem_core::FlowEventKind::FlowCompleted { .. } => "C",
         })
         .collect();
@@ -586,4 +600,203 @@ fn run_f5_lowlevel() {
     let instance = repo.load(flow_id, &events, &def);
     println!("[F5] replay lowlevel completed? {} (steps={})", instance.completed, def.len());
     drop(store);
+}
+/// Validación F9: Branching determinista, clon parcial de eventos y convergencia de fingerprints.
+fn run_f9_validation() {
+    use chem_core::{FlowEngine, build_flow_definition};
+    use chem_core::event::{FlowEventKind, InMemoryEventStore};
+    use chem_core::repo::InMemoryFlowRepository;
+    use chem_core::step::{StepDefinition, StepKind, StepRunResult};
+    use uuid::Uuid;
+
+    // Steps dummy para el flujo
+    struct Src;
+    impl StepDefinition for Src {
+        fn id(&self) -> &str { "src" }
+        fn kind(&self) -> StepKind { StepKind::Source }
+        fn run(&self, _ctx: &chem_core::model::ExecutionContext) -> StepRunResult {
+            let art = chem_core::model::Artifact {
+                kind: chem_core::model::ArtifactKind::GenericJson,
+                hash: String::new(),
+                payload: serde_json::json!({ "data": "initial" }),
+                metadata: None,
+            };
+            StepRunResult::Success { outputs: vec![art] }
+        }
+        fn base_params(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn name(&self) -> &str { "src" }
+    }
+
+    struct StepA;
+    impl StepDefinition for StepA {
+        fn id(&self) -> &str { "step_a" }
+        fn kind(&self) -> StepKind { StepKind::Transform }
+        fn run(&self, _ctx: &chem_core::model::ExecutionContext) -> StepRunResult {
+            let art = chem_core::model::Artifact {
+                kind: chem_core::model::ArtifactKind::GenericJson,
+                hash: String::new(),
+                payload: serde_json::json!({ "processed": "a" }),
+                metadata: None,
+            };
+            StepRunResult::Success { outputs: vec![art] }
+        }
+        fn base_params(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn name(&self) -> &str { "step_a" }
+    }
+
+    struct StepB;
+    impl StepDefinition for StepB {
+        fn id(&self) -> &str { "step_b" }
+        fn kind(&self) -> StepKind { StepKind::Transform }
+        fn run(&self, _ctx: &chem_core::model::ExecutionContext) -> StepRunResult {
+            StepRunResult::Success { outputs: vec![] }
+        }
+        fn base_params(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn name(&self) -> &str { "step_b" }
+    }
+
+    let def = build_flow_definition(
+        &["src", "step_a", "step_b"],
+        vec![Box::new(Src), Box::new(StepA), Box::new(StepB)]
+    );
+    let mut engine = FlowEngine::new_with_stores(
+        InMemoryEventStore::default(),
+        InMemoryFlowRepository::new()
+    );
+    let parent_flow_id = Uuid::new_v4();
+
+    // Ejecutar src y step_a para tener un step FinishedOk
+    engine.next_with(parent_flow_id, &def).expect("src ok");
+    engine.next_with(parent_flow_id, &def).expect("step_a ok");
+
+    // Branch desde step_a (sin cambios de params)
+    let branch_id = engine.branch(parent_flow_id, &def, "step_a", None).expect("branch created");
+
+    // Verificar eventos en el branch: debe tener FlowInitialized, StepStarted(src), StepFinished(src), StepStarted(step_a), StepFinished(step_a)
+    let branch_events = engine.events_for(branch_id);
+    let has_src_finished = branch_events.iter().any(|e| matches!(e.kind, FlowEventKind::StepFinished { step_id: ref s, .. } if s == "src"));
+    let has_step_a_finished = branch_events.iter().any(|e| matches!(e.kind, FlowEventKind::StepFinished { step_id: ref s, .. } if s == "step_a"));
+    assert!(has_src_finished, "Branch debe contener StepFinished para src");
+    assert!(has_step_a_finished, "Branch debe contener StepFinished para step_a");
+
+    // Verificar BranchCreated en el parent
+    let parent_events = engine.events_for(parent_flow_id);
+    let has_branch_created = parent_events.iter().any(|e| matches!(e.kind, FlowEventKind::BranchCreated { .. }));
+    assert!(has_branch_created, "Parent debe tener BranchCreated");
+
+    // Ejecutar step_b en parent y branch para verificar convergencia de fingerprints
+    engine.next_with(parent_flow_id, &def).expect("parent step_b ok");
+    engine.next_with(branch_id, &def).expect("branch step_b ok");
+
+    let fp_parent = engine.last_step_fingerprint(parent_flow_id, "step_b").expect("fp parent");
+    let fp_branch = engine.last_step_fingerprint(branch_id, "step_b").expect("fp branch");
+    assert_eq!(fp_parent, fp_branch, "Fingerprints deben coincidir sin cambios de params");
+
+    println!("!Validación F9: OK (branching, clon parcial, BranchCreated, convergencia)");
+}
+
+/// Ejemplo / demo para F10: Inyección compuesta + Human Gate
+fn run_f10_example() -> Result<(), String> {
+    use chem_core::event::InMemoryEventStore;
+    use chem_core::repo::InMemoryFlowRepository;
+    use chem_core::{build_flow_definition, FlowEngine};
+    use chem_core::EventStore;
+    use uuid::Uuid;
+    use serde_json::json;
+
+    // Steps mínimos: Source que emite un artifact con propiedades y
+    // Transform que requiere potencialmente input humano.
+    struct SourceStep;
+    impl chem_core::step::StepDefinition for SourceStep {
+        fn id(&self) -> &str { "src" }
+        fn kind(&self) -> chem_core::step::StepKind { chem_core::step::StepKind::Source }
+        fn run(&self, _ctx: &chem_core::model::ExecutionContext) -> chem_core::step::StepRunResult {
+            let art = chem_core::model::Artifact {
+                kind: chem_core::model::ArtifactKind::GenericJson,
+                hash: String::new(),
+                payload: json!({ "properties": [1,2,3], "schema_version": 1 }),
+                metadata: None,
+            };
+            chem_core::step::StepRunResult::Success { outputs: vec![art] }
+        }
+        fn base_params(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn name(&self) -> &str { self.id() }
+    }
+
+    // Transform que emits a UserInteractionRequested by returning a StepSignal
+    // via SuccessWithSignals; the engine will translate signals to events.
+    struct HumanGateStep;
+    impl chem_core::step::StepDefinition for HumanGateStep {
+        fn id(&self) -> &str { "no method named `append_kind` found for struct `InMemoryEventStore` in the current scope
+items from traits can only be used if the trait is in t" }
+        fn kind(&self) -> chem_core::step::StepKind { chem_core::step::StepKind::Transform }
+        fn run(&self, ctx: &chem_core::model::ExecutionContext) -> chem_core::step::StepRunResult {
+            // if params request human_input flag, emit a UserInteractionRequested signal
+            let needs_human = ctx.params.get("needs_human").and_then(|v| v.as_bool()).unwrap_or(false);
+            if needs_human {
+                // signal data contains minimal schema for the human input request
+                let sig = chem_core::step::StepSignal { signal: "USER_INTERACTION_REQUESTED".to_string(), data: json!({ "prompt": "Approve?", "schema": {"provided": {"type":"string"}} }) };
+                return chem_core::step::StepRunResult::SuccessWithSignals { outputs: vec![], signals: vec![sig] };
+            }
+            // otherwise, succeed normally
+            chem_core::step::StepRunResult::Success { outputs: vec![] }
+        }
+        fn base_params(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn name(&self) -> &str { self.id() }
+    }
+
+    // Build definition and two engines: one without human gate and one with.
+    let def = build_flow_definition(&["src", "t"], vec![Box::new(SourceStep), Box::new(HumanGateStep)]);
+
+    // Run A: no human required
+    let flow_a = Uuid::new_v4();
+    let ev_a = InMemoryEventStore::default();
+    let repo_a = InMemoryFlowRepository::new();
+    let mut eng_a = FlowEngine::new_with_stores(ev_a, repo_a);
+    // register injectors from adapters (family hash + properties injector)
+    eng_a.injectors.push(Box::new(chem_adapters::injectors::FamilyHashInjector));
+    eng_a.injectors.push(Box::new(chem_adapters::injectors::PropertiesInjector));
+    eng_a.next_with(flow_a, &def).map_err(|e| e.to_string())?; // src
+    eng_a.next_with(flow_a, &def).map_err(|e| e.to_string())?; // t
+    let fp_a = eng_a.last_step_fingerprint(flow_a, "t").ok_or_else(|| "no fingerprint for flow_a".to_string())?;
+
+    // Run B: with human gate triggered by injecting needs_human param via overrides
+    let flow_b = Uuid::new_v4();
+    let ev_b = InMemoryEventStore::default();
+    let repo_b = InMemoryFlowRepository::new();
+    let mut eng_b = FlowEngine::new_with_stores(ev_b, repo_b);
+    eng_b.injectors.push(Box::new(chem_adapters::injectors::FamilyHashInjector));
+    eng_b.injectors.push(Box::new(chem_adapters::injectors::PropertiesInjector));
+
+    // Start src
+    eng_b.next_with(flow_b, &def).map_err(|e| e.to_string())?;
+
+    // Simulate that the engine requested user interaction for step 't' by
+    // appending a UserInteractionRequested event into the event_store (step_index=1).
+    eng_b.event_store.append_kind(flow_b, chem_core::FlowEventKind::UserInteractionRequested {
+        step_index: 1,
+        step_id: "t".to_string(),
+        schema: Some(json!({ "required": ["provided"] })),
+        hint: Some("Approve via CLI".to_string()),
+    });
+
+    // Attempt to resume with provided input (note signature: flow_id, &def, step_id, provided)
+    let provided = json!({ "provided": "approved" });
+    eng_b.resume_user_input(flow_b, &def, "t", provided.clone()).map_err(|e| e.to_string())?;
+
+    // Continue execution of step t after resume
+    eng_b.next_with(flow_b, &def).map_err(|e| e.to_string())?;
+    let fp_b = eng_b.last_step_fingerprint(flow_b, "t").ok_or_else(|| "no fingerprint for flow_b".to_string())?;
+
+    // Verify fingerprint invariance: fp_a and fp_b should be equal if the human input
+    // does not affect fingerprint (only overrides should).
+    println!("[F10] fingerprint no-gate: {}", fp_a);
+    println!("[F10] fingerprint with gate: {}", fp_b);
+
+    if fp_a != fp_b {
+        // If they differ, provide a helpful hint (might be expected if params differ)
+        return Err(format!("Fingerprints difieren: {} != {} (revisa que human input no cambie fingerprint)", fp_a, fp_b));
+    }
+
+    Ok(())
 }

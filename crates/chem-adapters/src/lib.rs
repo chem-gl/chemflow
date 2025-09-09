@@ -14,5 +14,19 @@
 pub mod artifacts;
 pub mod encoder;
 pub mod steps;
+pub mod injectors;
+
+pub use injectors::FamilyHashInjector;
+pub use injectors::PropertiesInjector;
+
+use chem_core::{EventStore, FlowRepository, FlowEngine};
+
+/// Helper: construct a FlowEngine with the adapters' injectors pre-registered.
+pub fn new_engine_with_adapters<E: EventStore, R: FlowRepository>(event_store: E, repository: R) -> FlowEngine<E, R> {
+	let mut engine = FlowEngine::new_with_stores(event_store, repository);
+	engine.injectors.push(Box::new(FamilyHashInjector));
+	engine.injectors.push(Box::new(PropertiesInjector));
+	engine
+}
 
 

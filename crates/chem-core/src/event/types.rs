@@ -88,6 +88,23 @@ pub enum FlowEventKind {
         /// Razón humana opcional (no canónica; sólo informativa).
         reason: Option<String>,
     },
+    /// Evento que indica que el engine solicita input humano para continuar.
+    /// Contiene un `schema` opcional para validar el input y `hint` descriptivo.
+    UserInteractionRequested {
+        step_index: usize,
+        step_id: String,
+        schema: Option<serde_json::Value>,
+        hint: Option<String>,
+    },
+    /// Evento que representa que el usuario/proveedor externo proveyó input.
+    /// `decision_hash` es el hash canónico del rationale/overrides que sí
+    /// participa (si corresponde) en el fingerprint si fue marcado como override.
+    UserInteractionProvided {
+        step_index: usize,
+        step_id: String,
+        provided: serde_json::Value,
+        decision_hash: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -9,6 +9,8 @@
 pub enum StepStatus {
     Pending,
     Running,
+    /// El engine espera input humano antes de continuar con el step.
+    AwaitingUserInput,
     FinishedOk,
     Failed,
 }

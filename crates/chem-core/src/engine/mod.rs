@@ -66,6 +66,8 @@ pub struct FlowEngine<E: EventStore, R: FlowRepository> {
     pub event_store: E,
     pub repository: R,
     pub artifact_store: HashMap<String, Artifact>,
+    /// Optional set of ParamInjectors applied in order during context preparation.
+    pub injectors: Vec<Box<dyn crate::injection::ParamInjector>>,
     /// Definición por defecto opcional para simplificar el uso del engine
     /// sin tener que pasar `definition` en cada llamada.
     default_definition: Option<FlowDefinition>,
@@ -109,7 +111,8 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
                default_flow_id: None,
                default_flow_name: None,
                retries_scheduled: 0,
-               retries_rejected: 0 }
+               retries_rejected: 0,
+               injectors: vec![] }
     }
 
     /// Crea un builder genérico para armar un flujo tipado paso a paso con
@@ -123,28 +126,30 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
     /// Genera además un `flow_id` por defecto, habilitando `*_default_flow()`
     /// sin configuración extra.
     pub fn new_with_definition(event_store: E, repository: R, definition: crate::repo::FlowDefinition) -> Self {
-        Self { event_store,
-               repository,
-               artifact_store: HashMap::new(),
-               default_definition: Some(definition),
-               default_flow_id: Some(Uuid::new_v4()),
-               default_flow_name: None,
-               retries_scheduled: 0,
-               retries_rejected: 0 }
+    Self { event_store,
+           repository,
+           artifact_store: HashMap::new(),
+           default_definition: Some(definition),
+           default_flow_id: Some(Uuid::new_v4()),
+           default_flow_name: None,
+           retries_scheduled: 0,
+           retries_rejected: 0,
+           injectors: vec![] }
     }
 
     /// Crea un nuevo motor recibiendo directamente los steps y construyendo
     /// automáticamente la `FlowDefinition` (derivando ids de cada step).
     pub fn new_with_steps(event_store: E, repository: R, steps: Vec<Box<dyn crate::step::StepDefinition>>) -> Self {
         let definition = crate::repo::build_flow_definition_auto(steps);
-        Self { event_store,
-               repository,
-               artifact_store: HashMap::new(),
-               default_definition: Some(definition),
-               default_flow_id: Some(Uuid::new_v4()),
-               default_flow_name: None,
-               retries_scheduled: 0,
-               retries_rejected: 0 }
+    Self { event_store,
+           repository,
+           artifact_store: HashMap::new(),
+           default_definition: Some(definition),
+           default_flow_id: Some(Uuid::new_v4()),
+           default_flow_name: None,
+           retries_scheduled: 0,
+           retries_rejected: 0,
+           injectors: vec![] }
     }
 
     /// Igual que `new_with_steps`, pero además define un `flow_id` generado y
@@ -215,6 +220,20 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
         let instance = self.load_or_init(flow_id, definition);
         let step_index = self.validate_state(&instance, definition)?;
         let (ctx, fingerprint, step_id) = self.prepare_context(&instance, definition, step_index)?;
+        // Heurística mínima: si params contienen key "requires_human_input": true,
+        // emitir UserInteractionRequested y mover slot a AwaitingUserInput (via event replay semantics).
+        if let Some(req) = ctx.params.get("requires_human_input").and_then(|v| v.as_bool()) {
+            if req {
+                self.event_store.append_kind(flow_id, FlowEventKind::UserInteractionRequested {
+                    step_index,
+                    step_id: step_id.clone(),
+                    schema: ctx.params.get("human_schema").cloned(),
+                    hint: ctx.params.get("human_hint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                });
+                // Stop processing this step now; caller will resume via resume_user_input
+                return Ok(());
+            }
+        }
         // Emit StepStarted antes de ejecutar.
         self.event_store.append_kind(flow_id,
                                      FlowEventKind::StepStarted { step_index,
@@ -284,13 +303,70 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
         if step_index > 0 && input_artifact.is_none() {
             return Err(CoreEngineError::MissingInputs);
         }
-        let params = step_def.base_params();
+        let base_params = step_def.base_params();
+        // Apply configured injectors deterministically: base -> injectors
+        let params = if !self.injectors.is_empty() {
+            crate::injection::CompositeInjector::apply_injectors(&self.injectors, &base_params, &ExecutionContext { input: input_artifact.clone(), params: base_params.clone() })
+        } else {
+            base_params
+        };
         let mut input_hashes: Vec<String> = input_artifact.iter().map(|a| a.hash.clone()).collect();
         input_hashes.sort();
         let fingerprint = compute_step_fingerprint(step_def.id(), &input_hashes, &params, &definition.definition_hash);
         let ctx = ExecutionContext { input: input_artifact,
                                      params };
         Ok((ctx, fingerprint, step_def.id().to_string()))
+    }
+
+    /// Reanudar ejecución de un flow tras la provisión de input humano.
+    /// Valida schema (básico), calcula `decision_hash` sobre el `provided`
+    /// y emite `UserInteractionProvided`. Devuelve Ok(true) si la reanudación
+    /// permitió continuar (es decir, el step quedó en Pending), Ok(false)
+    /// si no aplicaba, o Err en caso de validación/estado inválido.
+    pub fn resume_user_input(&mut self,
+                            flow_id: Uuid,
+                            definition: &FlowDefinition,
+                            step_id: &str,
+                            provided: serde_json::Value) -> Result<bool, CoreEngineError> {
+        // reconstruir instancia y verificar que exista un AwaitingUserInput para step_id
+        let instance = self.load_or_init(flow_id, definition);
+        let idx_opt = instance.steps.iter().position(|s| s.step_id == step_id);
+        let idx = match idx_opt { Some(i) => i, None => return Err(CoreEngineError::InvalidStepIndex) };
+        let slot = &instance.steps[idx];
+        if !matches!(slot.status, crate::step::StepStatus::AwaitingUserInput) {
+            return Ok(false);
+        }
+        // minimal schema validation: if FlowEvent UserInteractionRequested carried a schema,
+        // ensure provided has the keys listed in schema["required"] if present.
+        let events = self.event_store.list(flow_id);
+        // find last UserInteractionRequested for this step_index
+        let mut schema_opt: Option<serde_json::Value> = None;
+        for e in events.iter().rev() {
+            if let FlowEventKind::UserInteractionRequested { step_index, step_id: sid, schema, .. } = &e.kind {
+                if *step_index == idx || sid == step_id { schema_opt = schema.clone(); break; }
+            }
+        }
+        if let Some(schema) = schema_opt {
+            if let Some(required) = schema.get("required").and_then(|v| v.as_array()) {
+                for r in required.iter() {
+                    if let Some(key) = r.as_str() {
+                        if !provided.get(key).is_some() {
+                            return Err(CoreEngineError::InvalidTransition { from: "AwaitingUserInput".into(), to: "ProvidedInvalidSchema".into() });
+                        }
+                    }
+                }
+            }
+        }
+        // compute decision_hash (rationale) – canonical json hash
+        let canonical = to_canonical_json(&provided);
+        let decision_hash = Some(hash_str(&canonical));
+        self.event_store.append_kind(flow_id, FlowEventKind::UserInteractionProvided {
+            step_index: idx,
+            step_id: step_id.to_string(),
+            provided: provided.clone(),
+            decision_hash: decision_hash.clone(),
+        });
+        Ok(true)
     }
 
     fn execute_step(&mut self,
@@ -400,6 +476,8 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
         let mut fps: Vec<String> = events.iter()
                                          .filter_map(|e| match &e.kind {
                                              FlowEventKind::StepFinished { fingerprint, .. } => Some(fingerprint.clone()),
+                                             FlowEventKind::UserInteractionProvided { decision_hash: _, .. } => None,
+                                             FlowEventKind::UserInteractionRequested { .. } => None,
                                              _ => None,
                                          })
                                          .collect();
@@ -571,6 +649,8 @@ impl<E: EventStore, R: FlowRepository> FlowEngine<E, R> {
                 FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
                 FlowEventKind::RetryScheduled { .. } => "R",
                 FlowEventKind::BranchCreated { .. } => "B",
+                FlowEventKind::UserInteractionRequested { .. } => "U",
+                FlowEventKind::UserInteractionProvided { .. } => "V",
                 FlowEventKind::FlowCompleted { .. } => "C",
             })
             .collect()
@@ -834,14 +914,15 @@ impl FlowEngine<crate::event::InMemoryEventStore, crate::repo::InMemoryFlowRepos
     /// Alternativa: crear un motor directamente desde una definición (con
     /// flow_id generado).
     pub fn from_definition(definition: crate::repo::FlowDefinition) -> Self {
-        Self { event_store: crate::event::InMemoryEventStore::default(),
-               repository: crate::repo::InMemoryFlowRepository::new(),
-               artifact_store: HashMap::new(),
-               default_definition: Some(definition),
-               default_flow_id: Some(Uuid::new_v4()),
-               default_flow_name: None,
-               retries_scheduled: 0,
-               retries_rejected: 0 }
+    Self { event_store: crate::event::InMemoryEventStore::default(),
+           repository: crate::repo::InMemoryFlowRepository::new(),
+           artifact_store: HashMap::new(),
+           default_definition: Some(definition),
+           default_flow_id: Some(Uuid::new_v4()),
+           default_flow_name: None,
+           retries_scheduled: 0,
+           retries_rejected: 0,
+           injectors: vec![] }
     }
 
     /// Asigna un nombre descriptivo al flow por defecto (builder-style).
@@ -1014,14 +1095,15 @@ impl<S: TypedStep + 'static, E: EventStore, R: FlowRepository> EngineBuilder<S, 
         debug_assert!(matches!(definition.steps.first().map(|s| s.kind()),
                                Some(crate::step::StepKind::Source)),
                       "El primer step debe ser de tipo Source");
-        FlowEngine { event_store: self.event_store,
-                     repository: self.repository,
-                     artifact_store: HashMap::new(),
-                     default_definition: Some(definition),
-                     default_flow_id: Some(Uuid::new_v4()),
-                     default_flow_name: None,
-                     retries_scheduled: 0,
-                     retries_rejected: 0 }
+    FlowEngine { event_store: self.event_store,
+             repository: self.repository,
+             artifact_store: HashMap::new(),
+             default_definition: Some(definition),
+             default_flow_id: Some(Uuid::new_v4()),
+             default_flow_name: None,
+             retries_scheduled: 0,
+             retries_rejected: 0,
+             injectors: vec![] }
     }
 }
 
@@ -1197,6 +1279,8 @@ mod tests {
         crate::event::FlowEventKind::RetryScheduled { .. } => "RetryScheduled",
     crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "PropertyPreferenceAssigned",
         crate::event::FlowEventKind::BranchCreated { .. } => "BranchCreated",
+    crate::event::FlowEventKind::UserInteractionRequested { .. } => "UserInteractionRequested",
+    crate::event::FlowEventKind::UserInteractionProvided { .. } => "UserInteractionProvided",
         crate::event::FlowEventKind::FlowCompleted { .. } => "FlowCompleted",
             }.to_string()
         }
@@ -1269,8 +1353,10 @@ mod tests {
                    crate::event::FlowEventKind::StepSignal { .. } => "G", // generic signal
                    crate::event::FlowEventKind::RetryScheduled { .. } => "R",
                        crate::event::FlowEventKind::BranchCreated { .. } => "B",
-                       crate::event::FlowEventKind::FlowCompleted { .. } => "C",
-                       crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
+                        crate::event::FlowEventKind::FlowCompleted { .. } => "C",
+                        crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
+                        crate::event::FlowEventKind::UserInteractionRequested { .. } => "U",
+                        crate::event::FlowEventKind::UserInteractionProvided { .. } => "V",
                })
                .collect::<Vec<_>>()
         };
@@ -1361,8 +1447,10 @@ mod tests {
                                          crate::event::FlowEventKind::FlowCompleted { .. } => "C",
                                          crate::event::FlowEventKind::StepFailed { .. } => "X",
                                          crate::event::FlowEventKind::StepSignal { .. } => "G",
-                     crate::event::FlowEventKind::RetryScheduled { .. } => "R",
+                    crate::event::FlowEventKind::RetryScheduled { .. } => "R",
                                          crate::event::FlowEventKind::PropertyPreferenceAssigned { .. } => "P",
+                                         crate::event::FlowEventKind::UserInteractionRequested { .. } => "U",
+                                         crate::event::FlowEventKind::UserInteractionProvided { .. } => "V",
                                      })
                                      .collect();
         assert_eq!(variants, vec!["I", "S", "F", "C"], "Secuencia esperada para un sólo step");

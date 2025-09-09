@@ -10,3 +10,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde", "clock"] }
 blake3 = "1"
 thiserror = "2.0"
+
+[dev-dependencies]
+chem-adapters = { path = "../chem-adapters" }

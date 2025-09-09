@@ -219,6 +219,8 @@ fn event_type_for(kind: &FlowEventKind) -> &'static str {
     FlowEventKind::PropertyPreferenceAssigned { .. } => "propertypreferenceassigned",
     FlowEventKind::RetryScheduled { .. } => "retryscheduled",
     FlowEventKind::BranchCreated { .. } => "branchcreated",
+    FlowEventKind::UserInteractionRequested { .. } => "userinteractionrequested",
+    FlowEventKind::UserInteractionProvided { .. } => "userinteractionprovided",
         FlowEventKind::FlowCompleted { .. } => "flowcompleted",
     }
 }
@@ -398,6 +400,8 @@ fn kind_variant_name(kind: &FlowEventKind) -> &'static str {
     FlowEventKind::PropertyPreferenceAssigned { .. } => "PropertyPreferenceAssigned",
     FlowEventKind::RetryScheduled { .. } => "RetryScheduled",
     FlowEventKind::BranchCreated { .. } => "BranchCreated",
+    FlowEventKind::UserInteractionRequested { .. } => "UserInteractionRequested",
+    FlowEventKind::UserInteractionProvided { .. } => "UserInteractionProvided",
         FlowEventKind::FlowCompleted { .. } => "FlowCompleted",
     }
 }

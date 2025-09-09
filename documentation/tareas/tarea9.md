@@ -65,14 +65,13 @@ Diagrama de flujo (mermaid)
 
 ```mermaid
 flowchart TD
-  ParentFlow([Parent flow (flow_id)]) -->|events| FE[FlowEngine]
-  FE -->|list events| ES[EventStore (PgEventStore / InMemory)]
-  FE -->|branch(from_step_id, div_hash?)| BRANCH[Generate branch_id]
-  FE -->|copy events up to StepFinished(from_step_id)| ES
-  ES -->|append copied events| BranchEventLog[EventLog for branch_id]
-  FE -->|append BranchCreated in parent| ES
-  ES -->|on append BranchCreated| DB[workflow_branches table]
-  note right of DB: row(branch_id, root_flow_id, parent_flow_id, created_from_step_id, divergence_params_hash)
+  ParentFlow(["Parent flow (flow_id)"]) -->|events| FE[FlowEngine]
+  FE -->|"list events"| ES["EventStore (PgEventStore / InMemory)"]
+  FE -->|"branch (from_step_id, div_hash?)"| BRANCH["Generate branch_id"]
+  FE -->|"copy events up to StepFinished from_step_id"| ES
+  ES -->|"append copied events"| BranchEventLog["EventLog for branch_id"]
+  FE -->|"append BranchCreated in parent"| ES
+  ES -->|"on append BranchCreated"| DB["workflow_branches table"]
 ```
 
 Diagrama de clases (mermaid)
