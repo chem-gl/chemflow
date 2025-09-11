@@ -1,4 +1,7 @@
+
 /// Validación F7: Retry manual mínimo, schedule_retry, eventos y replay.
+
+
 fn run_f7_validation() {
     use chem_core::{FlowEngine, build_flow_definition};
     use chem_core::repo::FlowRepository;
@@ -106,6 +109,12 @@ fn run_f7_validation() {
     assert_eq!(slot.retry_count, 1, "F7: retry_count debe ser 1 tras un retry");
 
     println!("!Validación F7: OK (retry manual, eventos y replay)");
+    //sierro manualmente todo  para evutar Segmentation fault         (core dumped) al salir
+    drop(engine);
+    drop(events);
+    drop(instance);
+    drop(def);
+
 }
 
 use chem_domain::Molecule;
@@ -200,8 +209,8 @@ fn main() {
     let smiles_ethanol = "CCO"; // Etanol
 
     // Crear moléculas y manejar posibles errores
-    let molecule1 = Molecule::new_molecule_with_smiles(smiles_benzene).expect("Error al crear la molécula 1");
-    let molecule2 = Molecule::new_molecule_with_smiles(smiles_ethanol).expect("Error al crear la molécula 2");
+    let molecule1 = Molecule::from_smiles(smiles_benzene).expect("Error al crear la molécula 1");
+    let molecule2 = Molecule::from_smiles(smiles_ethanol).expect("Error al crear la molécula 2");
 
     // Imprimir detalles de las moléculas
     println!("Molecula 1: {}", molecule1);

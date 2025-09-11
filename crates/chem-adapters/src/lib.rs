@@ -28,5 +28,3 @@ pub fn new_engine_with_adapters<E: EventStore, R: FlowRepository>(event_store: E
 	engine.injectors.push(Box::new(PropertiesInjector));
 	engine
 }
-
-

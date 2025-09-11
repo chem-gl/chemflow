@@ -21,7 +21,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use chem_core::{EventStore, FlowDefinition, FlowEvent, FlowEventKind, FlowRepository, InMemoryFlowRepository};
-use chem_core::errors::{CoreEngineError, ErrorClass, classify_error};
+use chem_core::errors::{ErrorClass, classify_error};
 use log::{debug, error, warn};
 
 use crate::error::PersistenceError;

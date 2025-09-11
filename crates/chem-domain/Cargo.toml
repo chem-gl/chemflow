@@ -11,3 +11,4 @@ edition = "2021"
  once_cell = "1.17"
  thiserror = "2.0"
  chemengine = { path = "../chem-engine" }
+ chrono = { version = "0.4", features = ["serde"] }

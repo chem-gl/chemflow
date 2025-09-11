@@ -409,6 +409,7 @@ name = "chem-domain"
 version = "0.1.0"
 dependencies = [
  "chemengine",
+ "chrono",
  "once_cell",
  "serde",
  "serde_json",

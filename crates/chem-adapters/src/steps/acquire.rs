@@ -34,7 +34,7 @@ fn build_synthetic_family(dataset: &str) -> Result<MoleculeFamily, DomainError> 
 
     let mut mols = Vec::with_capacity(smiles_list.len());
     for s in smiles_list {
-        let m = Molecule::new_molecule_with_smiles(s)?;
+        let m = Molecule::from_smiles(s)?;
         mols.push(m);
     }
     // provenance mínimo y estable

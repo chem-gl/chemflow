@@ -179,7 +179,7 @@ Se implementaron los módulos de dominio en `crates/chem-domain`:
 ## 6. Ejemplos de Uso
 
 ```rust
-let mol = Molecule::new_molecule_with_smiles("CCO").unwrap();
+let mol = Molecule::from_smiles("CCO").unwrap();
 let prop_a = MolecularProperty::new(&mol, "LogP", 2.1_f32, None, true, serde_json::json!({"provider":"calcA"}));
 let prop_b = prop_a.with_quality(Some("high".into())).with_preferred(false);
 assert_ne!(prop_a.value_hash(), prop_b.value_hash()); // distinto hash por cambio de metadata / preferred / calidad

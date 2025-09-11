@@ -1,37 +1,3 @@
 {
-  "gitConfigUser.selectedProfile": "Cesar",
-  "cSpell.words": [
-    "antiox",
-    "chemflow",
-    "chrono",
-    "dataprovider",
-    "deduplicando",
-    "Explicacón",
-    "fams",
-    "idempotente",
-    "inchi",
-    "inchikey",
-    "inchikeys",
-    "logd",
-    "logp",
-    "lumo",
-    "physchem",
-    "pname",
-    "postgres",
-    "provs",
-    "puntajes",
-    "Recalcula",
-    "Recalcular",
-    "recomputado",
-    "reexecute",
-    "serializados",
-    "serializan",
-    "seteado",
-    "sqlx",
-    "TESTKEY",
-    "TIMESTAMPTZ",
-    "traitmolecule",
-    "uuid",
-    "Uuid"
-  ]
+  "gitConfigUser.selectedProfile": "Cesar"
 }

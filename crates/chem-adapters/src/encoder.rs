@@ -13,7 +13,6 @@
 
 use chem_core::model::{Artifact, ArtifactSpec};
 use serde_json::json;
-
 use chem_domain::{MolecularProperty, Molecule, MoleculeFamily};
 
 /// Contrato de empaquetado dominio → artifact neutral.
