@@ -3,7 +3,7 @@
 //! Rol en el flujo:
 //! - Cada ejecución del `FlowEngine` emite eventos a un `EventStore`
 //!   append-only.
-//! - Estos eventos permiten reconstruir el estado del `FlowRepository` (replay)
+//! - .-Estos eventos permiten reconstruir el estado del `FlowRepository` (replay)
 //!   sin depender de estructuras mutables.
 //! - El enum `FlowEventKind` define el contrato observable y estable del motor.
 use chrono::{DateTime, Utc};

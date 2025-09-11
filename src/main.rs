@@ -727,7 +727,8 @@ fn run_f10_example() -> Result<(), String> {
     // via SuccessWithSignals; the engine will translate signals to events.
     struct HumanGateStep;
     impl chem_core::step::StepDefinition for HumanGateStep {
-    fn id(&self) -> &str { "t" }
+        fn id(&self) -> &str { "no method named `append_kind` found for struct `InMemoryEventStore` in the current scope
+items from traits can only be used if the trait is in t" }
         fn kind(&self) -> chem_core::step::StepKind { chem_core::step::StepKind::Transform }
         fn run(&self, ctx: &chem_core::model::ExecutionContext) -> chem_core::step::StepRunResult {
             // if params request human_input flag, emit a UserInteractionRequested signal
@@ -757,14 +758,7 @@ fn run_f10_example() -> Result<(), String> {
     eng_a.injectors.push(Box::new(chem_adapters::injectors::PropertiesInjector));
     eng_a.next_with(flow_a, &def).map_err(|e| e.to_string())?; // src
     eng_a.next_with(flow_a, &def).map_err(|e| e.to_string())?; // t
-    let fp_a = match eng_a.last_step_fingerprint(flow_a, "t") {
-        Some(fp) => fp,
-        None => {
-            // Debug: collect events to help understand why fingerprint is missing
-            let events_a = eng_a.events_for(flow_a);
-            return Err(format!("no fingerprint for flow_a; events: {:?}", events_a));
-        }
-    };
+    let fp_a = eng_a.last_step_fingerprint(flow_a, "t").ok_or_else(|| "no fingerprint for flow_a".to_string())?;
 
     // Run B: with human gate triggered by injecting needs_human param via overrides
     let flow_b = Uuid::new_v4();
@@ -792,13 +786,7 @@ fn run_f10_example() -> Result<(), String> {
 
     // Continue execution of step t after resume
     eng_b.next_with(flow_b, &def).map_err(|e| e.to_string())?;
-    let fp_b = match eng_b.last_step_fingerprint(flow_b, "t") {
-        Some(fp) => fp,
-        None => {
-            let events_b = eng_b.events_for(flow_b);
-            return Err(format!("no fingerprint for flow_b; events: {:?}", events_b));
-        }
-    };
+    let fp_b = eng_b.last_step_fingerprint(flow_b, "t").ok_or_else(|| "no fingerprint for flow_b".to_string())?;
 
     // Verify fingerprint invariance: fp_a and fp_b should be equal if the human input
     // does not affect fingerprint (only overrides should).
