@@ -31,11 +31,10 @@ pub mod repo;
 pub mod step;
 pub mod injection;
 
-// Re-exports públicos principales
+
 pub use engine::{FlowCtx, FlowEngine};
 pub use event::{EventStore, FlowEvent, FlowEventKind, InMemoryEventStore};
 pub use model::{Artifact, ArtifactKind};
 pub use repo::{build_flow_definition, FlowDefinition, FlowRepository, InMemoryFlowRepository};
 pub use step::{Pipe, SameAs, StepDefinition, StepKind, StepRunResult, StepRunResultTyped, StepStatus, TypedStep};
-// Re-export injection API for external users/tests
 pub use injection::{CompositeInjector, ParamInjector};

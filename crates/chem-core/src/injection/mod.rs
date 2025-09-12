@@ -3,7 +3,7 @@ use crate::model::ExecutionContext;
 use serde_json::Value;
 
 /// Trait para inyectores de parámetros.
-pub trait ParamInjector: Send + Sync {
+pub trait ParamInjector: Send + Sync + std::fmt::Debug {
     /// Toma los `base` params del step y el contexto de ejecución y devuelve
     /// una extensión/overrides que será mergeada según el orden fijo.
     fn inject(&self, base: &Value, ctx: &ExecutionContext) -> Value;

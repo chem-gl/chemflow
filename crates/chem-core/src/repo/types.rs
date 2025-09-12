@@ -4,6 +4,21 @@
 //! En F2, el repositorio aplica un replay lineal: consume eventos en orden y
 //! actualiza un `FlowInstance` inmutable por evento. No almacena artifacts
 //! completos (sólo hashes) para mantener neutralidad.
+//!
+//! Branching (clon parcial):
+//! - Cuando se crea una rama (`FlowEngine::branch`), el engine copia la
+//!   sub-secuencia de eventos del flujo padre hasta (e incluyendo) el
+//!   `StepFinished` del `from_step_id` y los re-emite en el store bajo el
+//!   nuevo `branch_id`.
+//! - El repositorio asume que el store contiene esa sub-secuencia completa
+//!   y el `load` aplica replay exactamente igual que para flujos "normales".
+//! - Esto garantiza que la `FlowInstance` reconstruida para la rama tenga los
+//!   mismos `StepSlot` y `cursor` que el flujo padre en el punto de bifurcación.
+//! - Notas:
+//!   * Artifacts referenciados por hash se resuelven desde un `artifact_store`
+//!     compartido o backend persistente; la copia del log no duplica payloads.
+//!   * Eventos posteriores al punto de bifurcación no se copian; la rama los
+//!     puede generar de manera independiente.
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 

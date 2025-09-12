@@ -14,12 +14,12 @@ impl<T> SameAs<T> for T {}
 /// Usage:
 ///   let pipe = Pipe::new(SeedStep).then(SumStep).then(NextStep);
 ///   let definition: FlowDefinition = pipe.build();
-pub struct Pipe<S: TypedStep + 'static> {
+pub struct Pipe<S: TypedStep + StepDefinition + 'static> {
     steps: Vec<Box<dyn StepDefinition>>,
     _out: PhantomData<<S as TypedStep>::Output>,
 }
 
-impl<S: TypedStep + 'static> Pipe<S> {
+impl<S: TypedStep + StepDefinition + 'static> Pipe<S> {
     pub fn new(step: S) -> Self {
         Self { steps: vec![Box::new(step)],
                _out: PhantomData }
@@ -27,7 +27,7 @@ impl<S: TypedStep + 'static> Pipe<S> {
 
     /// Append a new step, enforcing N::Input == S::Output at compile time.
     pub fn then<N>(mut self, next: N) -> Pipe<N>
-        where N: TypedStep + 'static,
+        where N: TypedStep + StepDefinition + 'static,
               <N as TypedStep>::Input: SameAs<<S as TypedStep>::Output>
     {
         self.steps.push(Box::new(next));

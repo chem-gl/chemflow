@@ -63,7 +63,7 @@ pub trait TypedStep {
 // -------------------------------------------------------------
 // Adaptador: cualquier `TypedStep` implementa `StepDefinition` neutro.
 // -------------------------------------------------------------
-impl<T> crate::step::StepDefinition for T where T: TypedStep + 'static
+impl<T> crate::step::StepDefinition for T where T: TypedStep + 'static + std::fmt::Debug
 {
     fn id(&self) -> &str {
         self.id()

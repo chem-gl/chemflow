@@ -18,7 +18,7 @@ pub enum StepKind {
     Check,
 }
 
-pub trait StepDefinition {
+pub trait StepDefinition: std::fmt::Debug {
     fn id(&self) -> &str;
 
     /// Nombre opcional amigable.
@@ -35,4 +35,27 @@ pub trait StepDefinition {
 
     /// Tipo general del step.
     fn kind(&self) -> StepKind;
+}
+
+// Implementation for Box<dyn StepDefinition> to allow trait object delegation
+impl StepDefinition for Box<dyn StepDefinition> {
+    fn id(&self) -> &str {
+        (**self).id()
+    }
+
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn base_params(&self) -> Value {
+        (**self).base_params()
+    }
+
+    fn run(&self, ctx: &ExecutionContext) -> StepRunResult {
+        (**self).run(ctx)
+    }
+
+    fn kind(&self) -> StepKind {
+        (**self).kind()
+    }
 }

@@ -4,6 +4,7 @@ use serde_json::json;
 
 /// Simple injector that injects the FamilyArtifact's family_hash into params
 /// under key `family_hash` when an input artifact is present.
+#[derive(Debug)]
 pub struct FamilyHashInjector;
 
 impl ParamInjector for FamilyHashInjector {
@@ -21,6 +22,7 @@ impl ParamInjector for FamilyHashInjector {
 /// Injector that extracts a `properties` field from the input artifact payload
 /// and injects a lightweight `properties_summary` param (e.g. count of items)
 /// Useful as an example of an injector that reads artifact payload content.
+#[derive(Debug)]
 pub struct PropertiesInjector;
 
 impl ParamInjector for PropertiesInjector {
