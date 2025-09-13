@@ -1,8 +1,0 @@
--- -----------------------------------------------------------------------------
--- 0001_init.sql (UNIFICADA)
--- Esquema inicial consolidado: combina el contenido de las migraciones previas
--- Fuente de verdad tomada de las estructuras actuales usadas en el código
--- (ver `repository.rs`). Se eliminan columnas legacy (p.ej. source_provider)
--- ya deprecadas y se incluyen todas las nuevas (parameter_hash, provenance,
--- result_type, etc.). Seguro de ejecutar múltiples veces (IF NOT EXISTS).
--- -----------------------------------------------------------------------------

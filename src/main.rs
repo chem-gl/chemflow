@@ -333,4 +333,5 @@ fn main() {
     } else {
         println!("\nℹ️ DATABASE_URL no presente: se omite demo Postgres");
     }
+    std::thread::sleep(std::time::Duration::from_millis(100));
 }
