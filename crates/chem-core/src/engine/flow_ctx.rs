@@ -12,10 +12,8 @@ use uuid::Uuid;
 /// Proporciona una API ergonómica para ejecutar pasos y gestionar el estado
 /// de un flujo dentro de un `FlowEngine`.
 pub struct FlowCtx<'a, E, R>
-
-where
-    E: EventStore,
-    R: FlowRepository,
+    where E: EventStore,
+          R: FlowRepository
 {
     pub engine: &'a mut FlowEngine<E, R>,
     pub flow_id: Uuid,
@@ -23,9 +21,8 @@ where
 }
 
 impl<'a, E, R> FlowCtx<'a, E, R>
-where
-    E: EventStore,
-    R: FlowRepository,
+    where E: EventStore,
+          R: FlowRepository
 {
     /// Crea un nuevo contexto de flujo.
     #[inline]
@@ -54,7 +51,8 @@ where
         Ok(())
     }
 
-    /// Ejecuta pasos hasta que el flujo termine (FlowCompleted) o ocurra un error terminal.
+    /// Ejecuta pasos hasta que el flujo termine (FlowCompleted) o ocurra un
+    /// error terminal.
     #[inline]
     pub fn run_to_completion(&mut self) -> Result<(), CoreEngineError> {
         loop {

@@ -92,14 +92,14 @@ fn engine_flow_fingerprint_pg_vs_memory() {
     mem_engine.next_with(flow_id, &def_mem).unwrap();
     let mem_events = mem_engine.event_store().list(flow_id);
     let _final_fp_mem = mem_events.iter()
-                                 .find_map(|e| {
-                                     if let FlowEventKind::FlowCompleted { flow_fingerprint } = &e.kind {
-                                         Some(flow_fingerprint.clone())
-                                     } else {
-                                         None
-                                     }
-                                 })
-                                 .expect("mem flowcompleted");
+                                  .find_map(|e| {
+                                      if let FlowEventKind::FlowCompleted { flow_fingerprint } = &e.kind {
+                                          Some(flow_fingerprint.clone())
+                                      } else {
+                                          None
+                                      }
+                                  })
+                                  .expect("mem flowcompleted");
 
     // Postgres run (nueva secuencia desde cero con mismo flow_id)
     let cfg = DbConfig::from_env();
@@ -109,9 +109,22 @@ fn engine_flow_fingerprint_pg_vs_memory() {
     let pool = build_pool(&cfg.url, cfg.min_connections as u32, cfg.max_connections as u32).expect("pool");
     let provider = PoolProvider { pool };
     let store = PgEventStore::new(provider);
-
-    // ...existing code continues ...
-
-    // Prevent running native destructor during test teardown (leak only in tests)
-    std::mem::forget(store);
+    let mut pg_engine = FlowEngine::new_with_stores(store, InMemoryFlowRepository::new());
+    let def_pg = build_flow_definition(&["seed_pg", "add_pg"], vec![Box::new(Seed), Box::new(Add)]);
+    pg_engine.next_with(flow_id, &def_pg).unwrap();
+    pg_engine.next_with(flow_id, &def_pg).unwrap();
+    let pg_events = pg_engine.event_store().list(flow_id);
+    let _final_fp_pg = pg_events.iter()
+                               .find_map(|e| {
+                                   if let FlowEventKind::FlowCompleted { flow_fingerprint } = &e.kind {
+                                       Some(flow_fingerprint.clone())
+                                   } else {
+                                       None
+                                   }
+                               })
+                               .expect("pg flowcompleted");
+    // Verifica que los fingerprints coinciden
+    assert_eq!(_final_fp_mem, _final_fp_pg, "fingerprints deben coincidir");
+    drop(pg_engine);
+    std::thread::sleep(std::time::Duration::from_millis(100));
 }

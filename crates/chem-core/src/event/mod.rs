@@ -2,8 +2,8 @@
 //!
 //! Este módulo encapsula dos responsabilidades claramente separadas:
 //! - `types`: definición del shape de eventos (`FlowEvent`, `FlowEventKind`).
-//! - `store`: trait `EventStore` y una implementación en memoria para pruebas
-//!   y desarrollo (`InMemoryEventStore`).
+//! - `store`: trait `EventStore` y una implementación en memoria para pruebas y
+//!   desarrollo (`InMemoryEventStore`).
 //!
 //! Diseño:
 //! - El `FlowEngine` solo depende del trait `EventStore` para escribir/listar

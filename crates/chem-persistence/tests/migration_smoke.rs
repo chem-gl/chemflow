@@ -36,6 +36,7 @@ fn migration_allows_branchcreated_event_type() {
     }
 
     // Prevent Drop-based teardown that may crash native libs in tests
-    std::mem::forget(store);
+    drop(store);
     // provider and pool were moved into store; nothing else to forget.
+    std::thread::sleep(std::time::Duration::from_millis(100));
 }

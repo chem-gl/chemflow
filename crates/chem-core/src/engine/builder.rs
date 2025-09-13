@@ -7,8 +7,9 @@
 //! Notas de diseño
 //! - `EngineBuilderInit` representa el estado inicial del builder: stores
 //!   (event_store + repository) deben estar presentes.
-//! - `EngineBuilder<S, E, R>` mantiene el último tipo de salida conocido `S::Output`
-//!   (mediante `PhantomData`) y la lista de pasos en forma de `Vec<Box<dyn StepDefinition>>`.
+//! - `EngineBuilder<S, E, R>` mantiene el último tipo de salida conocido
+//!   `S::Output` (mediante `PhantomData`) y la lista de pasos en forma de
+//!   `Vec<Box<dyn StepDefinition>>`.
 //! - El método `add_step` impone en sus bounds que la entrada del siguiente
 //!   paso sea compatible con la salida del paso anterior usando `SameAs`.
 //!
@@ -51,23 +52,17 @@ impl<E: EventStore, R: FlowRepository> EngineBuilderInit<E, R> {
     /// el desarrollo; en builds release la aserción queda desactivada.
     #[inline]
     pub fn first_step<S>(self, step: S) -> EngineBuilder<S, E, R>
-    where
-        S: TypedStep + Debug + 'static,
+        where S: TypedStep + Debug + 'static
     {
-
-    // ...existing code...
+        // ...existing code...
         // Ayuda al desarrollador: el primer paso conceptualmente debe ser una fuente
-        debug_assert!(
-            matches!(step.kind(), crate::step::StepKind::Source),
-            "El primer paso debe ser de tipo Source",
-        );
+        debug_assert!(matches!(step.kind(), crate::step::StepKind::Source),
+                      "El primer paso debe ser de tipo Source",);
 
-        EngineBuilder {
-            event_store: self.event_store,
-            repository: self.repository,
-            steps: vec![Box::new(step)],
-            _out: PhantomData::<S::Output>,
-        }
+        EngineBuilder { event_store: self.event_store,
+                        repository: self.repository,
+                        steps: vec![Box::new(step)],
+                        _out: PhantomData::<S::Output> }
     }
 }
 
@@ -96,21 +91,18 @@ impl<S: TypedStep + Debug + 'static, E: EventStore, R: FlowRepository> EngineBui
     /// un nuevo `EngineBuilder` parametrizado por el nuevo paso `N`.
     #[inline]
     pub fn add_step<N>(mut self, next: N) -> EngineBuilder<N, E, R>
-    where
-        N: TypedStep + Debug + 'static,
-        N::Input: SameAs<S::Output>,
+        where N: TypedStep + Debug + 'static,
+              N::Input: SameAs<S::Output>
     {
         self.steps.push(Box::new(next));
 
-        EngineBuilder {
-            event_store: self.event_store,
-            repository: self.repository,
-            steps: self.steps,
-            _out: PhantomData,
-        }
+        EngineBuilder { event_store: self.event_store,
+                        repository: self.repository,
+                        steps: self.steps,
+                        _out: PhantomData }
     }
 
-        // ...existing code...
+    // ...existing code...
     /// Construye el `FlowEngine` final usando las stores y la lista de pasos.
     ///
     /// Este método consume el builder. Genera automáticamente la definición

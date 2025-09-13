@@ -41,8 +41,9 @@ fn seq_is_contiguous_for_single_flow() {
                    "seq debe ser contiguo (esperado {expected} got {} base {base})",
                    ev.seq);
     }
-    // Drop explícito para liberar conexiones antes de terminar el proceso de test
-    drop(store);
+    // Prevent native destructor races in test teardown by leaking store (tests
+    // only)
+    std::mem::forget(store);
 }
 
 // InMemory parity del contrato (también contiguo)

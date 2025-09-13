@@ -5,7 +5,8 @@
 //!
 //! Reglas clave:
 //! - Debe ser determinista: la salida depende únicamente de `ExecutionContext`.
-//! - El primer step de un flujo suele ser `StepKind::Source` (no requiere input).
+//! - El primer step de un flujo suele ser `StepKind::Source` (no requiere
+//!   input).
 //! - Los Steps no deben tener efectos secundarios observables por el engine.
 //!
 //! Este módulo expone:
@@ -44,10 +45,11 @@ pub trait StepDefinition: std::fmt::Debug {
         self.id()
     }
 
-    /// Parámetros deterministas por defecto serializados como `serde_json::Value`.
+    /// Parámetros deterministas por defecto serializados como
+    /// `serde_json::Value`.
     ///
-    /// Estos parámetros pueden ser fusionados con overrides en tiempo de ejecución
-    /// por el engine o por inyectores externos.
+    /// Estos parámetros pueden ser fusionados con overrides en tiempo de
+    /// ejecución por el engine o por inyectores externos.
     fn base_params(&self) -> Value;
 
     /// Ejecuta el step de forma pura. Debe depender únicamente de `ctx`.

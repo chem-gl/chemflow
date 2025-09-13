@@ -22,8 +22,8 @@ use super::{FlowEvent, FlowEventKind};
 /// Almacenamiento de eventos append-only para "flows".
 ///
 /// Contrato principal:
-/// - `append_kind` añade un evento determinista al final del log de `flow_id`
-///   y asigna `seq` y `ts`.
+/// - `append_kind` añade un evento determinista al final del log de `flow_id` y
+///   asigna `seq` y `ts`.
 /// - `list` devuelve todos los eventos del `flow_id` en orden ascendente por
 ///   `seq`.
 ///
@@ -55,7 +55,8 @@ impl InMemoryEventStore {
         Self { inner: HashMap::new() }
     }
 
-    /// Helper: obtiene el número de eventos actualmente almacenados para un flow.
+    /// Helper: obtiene el número de eventos actualmente almacenados para un
+    /// flow.
     pub fn len_for(&self, flow_id: Uuid) -> usize {
         self.inner.get(&flow_id).map(|v| v.len()).unwrap_or(0)
     }
@@ -74,7 +75,10 @@ impl EventStore for InMemoryEventStore {
         // Sequence number is 0-based and equal to current length of the vector.
         let seq = vec.len() as u64;
 
-        let ev = FlowEvent { seq, flow_id, kind, ts: Utc::now() };
+        let ev = FlowEvent { seq,
+                             flow_id,
+                             kind,
+                             ts: Utc::now() };
 
         // Push and return a clone to keep ownership semantics clear.
         vec.push(ev.clone());

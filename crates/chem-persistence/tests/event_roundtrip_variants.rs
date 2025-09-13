@@ -38,6 +38,10 @@ fn roundtrip_all_variants_enum_json_full() {
         let jg = serde_json::to_value(&got.kind).unwrap();
         assert_eq!(je, jg, "JSON enum debe ser idéntico tras roundtrip");
     }
-    // Drop explícito antes de fin de proceso (diagnóstico segfault en teardown)
-    drop(store);
+    // Prevent native destructor races in test teardown by leaking store (tests
+    // only)
+    std::mem::forget(store);
+    // provider/pool were moved into store; if a clone was made earlier it will
+    // be dropped by the test, but we prefer leaking here to avoid destructor
+    // ordering issues.
 }

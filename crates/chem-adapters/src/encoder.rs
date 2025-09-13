@@ -12,8 +12,8 @@
 //! - Este encoder NO calcula `hash` (lo hace el engine cuando acepta outputs).
 
 use chem_core::model::{Artifact, ArtifactSpec};
-use serde_json::json;
 use chem_domain::{MolecularProperty, Molecule, MoleculeFamily};
+use serde_json::json;
 
 /// Contrato de empaquetado dominio → artifact neutral.
 pub trait DomainArtifactEncoder {

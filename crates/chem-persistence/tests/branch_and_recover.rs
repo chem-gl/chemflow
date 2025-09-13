@@ -2,12 +2,10 @@ use uuid::Uuid;
 
 #[test]
 fn pg_recover_and_branch_with_param_change() {
-    // Require DATABASE_URL for integration
     if std::env::var("DATABASE_URL").is_err() {
         eprintln!("DATABASE_URL not set - skipping PG integration test");
         return;
     }
-
     use chem_core::model::{Artifact, ArtifactKind, ExecutionContext};
     use chem_core::step::{StepDefinition, StepKind, StepRunResult};
     use chem_core::{repo::build_flow_definition, FlowEngine};
@@ -61,6 +59,10 @@ fn pg_recover_and_branch_with_param_change() {
 
     // Build pool and stores
     let pool = build_dev_pool_from_env().expect("build pool");
+    // Keep a clone of the pool and forget it at test end to avoid running
+    // native destructors (r2d2/pg client libs) during test runner teardown
+    // which can trigger crashes in some environments (krb5 destructor races).
+    let pool_clone = pool.clone();
     let provider = PoolProvider { pool };
     let store = PgEventStore::new(provider);
 
@@ -86,6 +88,9 @@ fn pg_recover_and_branch_with_param_change() {
     // Recreate engine backed by PG (simulates recovery) and ensure events are
     // visible
     let pool2 = build_dev_pool_from_env().expect("build pool2");
+    // Keep a clone of the second pool for the recovered engine and leak it as
+    // well to avoid destructor races at process teardown.
+    let pool2_clone = pool2.clone();
     let provider2 = PoolProvider { pool: pool2 };
     let store2 = PgEventStore::new(provider2);
     let repo2 = PgFlowRepository::new();
@@ -141,8 +146,11 @@ fn pg_recover_and_branch_with_param_change() {
     }
 
     // Prevent running native destructors that can crash in test runner teardown
-    // by forgetting the engines which own the stores/providers. This leaks in
-    // tests only but avoids native teardown races.
-    std::mem::forget(engine);
-    std::mem::forget(recovered_engine);
+    // by forgetting the engines and a clone of the pools which would otherwise
+    // run native teardown logic. This intentionally leaks a tiny amount in
+    // tests but avoids crashes observed in CI/local environments.
+    drop(recovered_engine);
+    drop(engine);
+    drop(pool_clone);
+    std::thread::sleep(std::time::Duration::from_millis(100));
 }

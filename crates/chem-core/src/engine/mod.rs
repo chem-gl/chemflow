@@ -3,12 +3,12 @@
 //! Provides the core engine, builder pattern, and flow context for
 //! deterministic workflow execution.
 
-pub mod core;
 pub mod builder;
+pub mod core;
 pub mod flow_ctx;
 
+pub use builder::{EngineBuilder, EngineBuilderInit};
 pub use core::FlowEngine;
-pub use builder::{EngineBuilderInit, EngineBuilder};
 pub use flow_ctx::FlowCtx;
 
 pub use crate::event::{EventStore, FlowEvent, FlowEventKind, InMemoryEventStore};
@@ -25,9 +25,10 @@ mod tests {
     use crate::typed_artifact;
     use crate::typed_step;
 
-    // --- Helpers de test: pequeña spec JSON para TypedStep -------------------------
-    // Usamos los macros de ayuda para reducir el boilerplate de tests.
-    // Definimos una pequeña spec JSON y tres pasos (Source/Transform/Sink).
+    // --- Helpers de test: pequeña spec JSON para TypedStep
+    // ------------------------- Usamos los macros de ayuda para reducir el
+    // boilerplate de tests. Definimos una pequeña spec JSON y tres pasos
+    // (Source/Transform/Sink).
     typed_artifact!(JsonSpec { value: serde_json::Value });
     typed_step! {
         source SourceStep {
@@ -126,11 +127,9 @@ mod tests {
 
         let flow_id = engine.ensure_default_flow_id();
 
-        let steps: Vec<Box<dyn crate::step::StepDefinition>> = vec![
-            Box::new(SourceStep::new()),
-            Box::new(TransformStep::new()),
-            Box::new(SinkStep::new()),
-        ];
+        let steps: Vec<Box<dyn crate::step::StepDefinition>> = vec![Box::new(SourceStep::new()),
+                                                                    Box::new(TransformStep::new()),
+                                                                    Box::new(SinkStep::new()),];
         let definition = crate::repo::build_flow_definition_auto(steps);
 
         let mut ctx = FlowCtx::new(&mut engine, flow_id, &definition);

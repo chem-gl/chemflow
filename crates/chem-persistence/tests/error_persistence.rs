@@ -10,49 +10,49 @@ use chem_core::errors::CoreEngineError;
 use chem_core::{EventStore, FlowEventKind};
 use chem_persistence::pg::{build_dev_pool_from_env, PgEventStore, PoolProvider};
 use uuid::Uuid;
-
 #[test]
 fn test_error_persistence_on_step_failed() {
-    // Requiere DATABASE_URL
     if std::env::var("DATABASE_URL").is_err() {
         eprintln!("Skipping test_error_persistence_on_step_failed: DATABASE_URL not set");
         return;
     }
 
-    let pool = build_dev_pool_from_env().expect("pool");
-    let provider = PoolProvider { pool };
-    let mut store = PgEventStore::new(provider);
+    // Encerrar el uso del store en un bloque para asegurar drop explícito antes de
+    // salir del test.
+    {
+        let pool = build_dev_pool_from_env().expect("pool");
+        let provider = PoolProvider { pool };
+        let mut store = PgEventStore::new(provider);
 
-    let flow_id = Uuid::new_v4();
-    let step_id = "test_step".to_string();
+        let flow_id = Uuid::new_v4();
+        let step_id = "test_step".to_string();
 
-    // Emitir StepFailed
-    let error = CoreEngineError::Internal("test error".to_string());
-    let kind = FlowEventKind::StepFailed { step_index: 0,
-                                           step_id: step_id.clone(),
-                                           error: error.clone(),
-                                           fingerprint: "test_fp".to_string() };
-    let _event = store.append_kind(flow_id, kind);
+        let error = CoreEngineError::Internal("test error".to_string());
+        let kind = FlowEventKind::StepFailed { step_index: 0,
+                                               step_id: step_id.clone(),
+                                               error: error.clone(),
+                                               fingerprint: "test_fp".to_string() };
+        let _event = store.append_kind(flow_id, kind);
 
-    // Verificar que se insertó en step_execution_errors
-    let errors = store.list_errors(flow_id);
-    assert_eq!(errors.len(), 1, "Debe haber un error registrado");
-    let err = &errors[0];
-    assert_eq!(err.flow_id, flow_id);
-    assert_eq!(err.step_id, step_id);
-    assert_eq!(err.attempt_number, 1);
-    assert_eq!(err.error_class, "runtime");
-    // details debe contener el error serializado
-    if let Some(details) = &err.details {
-        let deserialized: CoreEngineError = serde_json::from_value(details.clone()).expect("deserialize error");
-        assert_eq!(deserialized, error);
-    } else {
-        panic!("details should be present");
+        let errors = store.list_errors(flow_id);
+        assert_eq!(errors.len(), 1, "Debe haber un error registrado");
+        let err = &errors[0];
+        assert_eq!(err.flow_id, flow_id);
+        assert_eq!(err.step_id, step_id);
+        assert_eq!(err.attempt_number, 1);
+        assert_eq!(err.error_class, "runtime");
+
+        if let Some(details) = &err.details {
+            let deserialized: CoreEngineError = serde_json::from_value(details.clone()).expect("deserialize error");
+            assert_eq!(deserialized, error);
+        } else {
+            panic!("details should be present");
+        }
+
+        // store sale del scope y se dropea aquí
     }
 
-    // Avoid running native destructor on pool/provider/store during test teardown
-    std::mem::forget(store);
-    // provider and pool were moved into store; no further action required.
+    std::thread::sleep(std::time::Duration::from_millis(100));
 }
 
 #[test]

@@ -1,4 +1,3 @@
--- EVENT_LOG: registro append-only de eventos del motor
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS event_log (
@@ -13,7 +12,6 @@ CREATE TABLE IF NOT EXISTS event_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_log_flow_seq ON event_log(flow_id, seq);
--- Tabla opcional en F3 (puede posponerse si no se usan artifacts persistidos aún)
 CREATE TABLE IF NOT EXISTS workflow_step_artifacts (
     artifact_hash TEXT PRIMARY KEY CHECK (length(artifact_hash)=64),
     kind TEXT NOT NULL,
@@ -22,13 +20,6 @@ CREATE TABLE IF NOT EXISTS workflow_step_artifacts (
     produced_in_seq BIGINT NOT NULL REFERENCES event_log(seq) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_seq ON workflow_step_artifacts(produced_in_seq);
--- 0003: Extiende el conjunto permitido de event_type para incluir
--- 'propertypreferenceassigned' (F6).
---
--- Nota: En 0001 se definieron dos CHECKs de columna (lower() e IN (...)).
--- Aquí detectamos y eliminamos el CHECK del IN por introspección de catálogo
--- y añadimos una versión nueva y nominal para futuras migraciones.
-
 DO $$
 DECLARE
     r RECORD;
@@ -44,8 +35,6 @@ BEGIN
         END IF;
     END LOOP;
 END$$;
-
--- Añadimos un CHECK nominal (nombre estable) con el set actualizado
 ALTER TABLE event_log
     ADD CONSTRAINT event_log_event_type_in_check
         CHECK (event_type IN (
@@ -57,8 +46,6 @@ ALTER TABLE event_log
             'propertypreferenceassigned',
             'flowcompleted'
         ));
--- 0004: Soporte de evento 'retryscheduled' en event_log.event_type
--- Extiende el CHECK nominal agregado en 0003.
 
 ALTER TABLE event_log
     DROP CONSTRAINT IF EXISTS event_log_event_type_in_check;
@@ -75,8 +62,7 @@ ALTER TABLE event_log
             'retryscheduled',
             'flowcompleted'
         ));
--- 0005: Tabla para persistir errores de ejecución de steps con retry_count
--- Soporte para auditoría granular de fallos y reconstrucción de timeline.
+
 
 CREATE TABLE IF NOT EXISTS step_execution_errors (
     id BIGSERIAL PRIMARY KEY,
@@ -105,14 +91,7 @@ CREATE TABLE IF NOT EXISTS workflow_branches (
 
 CREATE INDEX IF NOT EXISTS ix_branches_root ON workflow_branches(root_flow_id);
 CREATE INDEX IF NOT EXISTS ix_branches_parent ON workflow_branches(parent_flow_id);
--- Migration: extend allowed event_type values on event_log
--- This migration updates the CHECK constraint to include additional
--- event types emitted by the engine (branchcreated, propertypreferenceassigned, retryscheduled,
--- userinteractionrequested, userinteractionprovided).
--- Update the event_type CHECK to include the set of allowed variants.
--- Do NOT include explicit BEGIN/COMMIT here: the Diesel migration harness
--- runs migrations inside transactions and explicit transaction control
--- inside migration files causes "Cannot perform this operation outside of a transaction".
+
 
 ALTER TABLE event_log DROP CONSTRAINT IF EXISTS event_log_event_type_check1;
 

@@ -3,8 +3,8 @@
 //! Rol en el flujo:
 //! - Cada ejecución del `FlowEngine` emite eventos a un `EventStore`
 //!   append-only.
-//! - .-Estos eventos permiten reconstruir el estado del `FlowRepository` (replay)
-//!   sin depender de estructuras mutables.
+//! - .-Estos eventos permiten reconstruir el estado del `FlowRepository`
+//!   (replay) sin depender de estructuras mutables.
 //! - El enum `FlowEventKind` define el contrato observable y estable del motor.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -51,13 +51,17 @@ pub enum FlowEventKind {
     /// auditable y determinista. Debe emitirse antes del StepFinished que lo
     /// origina.
     PropertyPreferenceAssigned {
-        /// Clave estable de la propiedad seleccionada (p.ej., inchikey+kind o id lógico).
+        /// Clave estable de la propiedad seleccionada (p.ej., inchikey+kind o
+        /// id lógico).
         property_key: String,
-        /// Identificador estable de la política de selección (p.ej., "max_score").
+        /// Identificador estable de la política de selección (p.ej.,
+        /// "max_score").
         policy_id: String,
-        /// Hash canónico de los parámetros de la política (influye en fingerprint del step via params del step).
+        /// Hash canónico de los parámetros de la política (influye en
+        /// fingerprint del step via params del step).
         params_hash: String,
-        /// Rationale serializado en JSON canónico (además puede existir forma tipada en capas superiores).
+        /// Rationale serializado en JSON canónico (además puede existir forma
+        /// tipada en capas superiores).
         rationale: serde_json::Value,
     },
     /// Evento que representa la creación de una rama (branch) a partir de un
@@ -89,7 +93,8 @@ pub enum FlowEventKind {
         reason: Option<String>,
     },
     /// Evento que indica que el engine solicita input humano para continuar.
-    /// Contiene un `schema` opcional para validar el input y `hint` descriptivo.
+    /// Contiene un `schema` opcional para validar el input y `hint`
+    /// descriptivo.
     UserInteractionRequested {
         step_index: usize,
         step_id: String,
@@ -98,7 +103,8 @@ pub enum FlowEventKind {
     },
     /// Evento que representa que el usuario/proveedor externo proveyó input.
     /// `decision_hash` es el hash canónico del rationale/overrides que sí
-    /// participa (si corresponde) en el fingerprint si fue marcado como override.
+    /// participa (si corresponde) en el fingerprint si fue marcado como
+    /// override.
     UserInteractionProvided {
         step_index: usize,
         step_id: String,

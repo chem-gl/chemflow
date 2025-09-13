@@ -1,10 +1,5 @@
--- 0001_init/up.sql
--- Consolidated initial migration for chem-persistence (idempotent, no explicit transactions)
 
--- Create extension required utilities
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
--- Events log (append-only)
 CREATE TABLE IF NOT EXISTS event_log (
     seq BIGSERIAL PRIMARY KEY,
     flow_id UUID NOT NULL,
@@ -12,8 +7,6 @@ CREATE TABLE IF NOT EXISTS event_log (
     event_type TEXT NOT NULL,
     payload JSONB NOT NULL
 );
-
--- Ensure a single named CHECK contains the allowed event_type set
 ALTER TABLE event_log
     DROP CONSTRAINT IF EXISTS event_log_event_type_check;
 ALTER TABLE event_log
@@ -78,10 +71,7 @@ CREATE TABLE IF NOT EXISTS workflow_branches (
 );
 CREATE INDEX IF NOT EXISTS ix_branches_root ON workflow_branches(root_flow_id);
 CREATE INDEX IF NOT EXISTS ix_branches_parent ON workflow_branches(parent_flow_id);
--- 0005_step_execution_errors/up.sql
--- Migration for F8: persist granular step execution errors for audit and recovery
 
--- Create table to store execution errors emitted by steps
 CREATE TABLE IF NOT EXISTS step_execution_errors (
     id BIGSERIAL PRIMARY KEY,
     flow_id UUID NOT NULL,
@@ -92,9 +82,19 @@ CREATE TABLE IF NOT EXISTS step_execution_errors (
     ts TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Indexes to support queries by flow and by (step, attempt)
 CREATE INDEX IF NOT EXISTS idx_step_execution_errors_flow_id ON step_execution_errors(flow_id);
 CREATE INDEX IF NOT EXISTS idx_step_execution_errors_step_attempt ON step_execution_errors(step_id, attempt_number);
 
--- Note: migrations run inside a transaction by the harness; do NOT include explicit
--- BEGIN/COMMIT here. This file is idempotent and safe to re-run.
+
+CREATE TABLE IF NOT EXISTS step_execution_errors (
+    id BIGSERIAL PRIMARY KEY,
+    flow_id UUID NOT NULL,
+    step_id TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    error_class TEXT NOT NULL,
+    error_payload JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_step_execution_errors_flow_id ON step_execution_errors(flow_id);
+CREATE INDEX IF NOT EXISTS idx_step_execution_errors_step_attempt ON step_execution_errors(step_id, attempt_number);

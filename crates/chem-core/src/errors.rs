@@ -44,10 +44,20 @@ pub enum ErrorClass {
     Runtime,
 }
 
-/// Clasifica un error del engine en una categoría estable para políticas de retry y auditoría.
+/// Clasifica un error del engine en una categoría estable para políticas de
+/// retry y auditoría.
 pub fn classify_error(error: &CoreEngineError) -> ErrorClass {
     match error {
         CoreEngineError::Internal(_) | CoreEngineError::StorageError(_) => ErrorClass::Runtime,
-    CoreEngineError::InvalidStepIndex | CoreEngineError::MissingInputs | CoreEngineError::FirstStepMustBeSource | CoreEngineError::StepAlreadyTerminal | CoreEngineError::FlowCompleted | CoreEngineError::FlowHasFailed | CoreEngineError::InvalidBranchSource | CoreEngineError::RetryNotAllowed { .. } | CoreEngineError::InvalidTransition { .. } | CoreEngineError::PolicyViolation(_) => ErrorClass::Validation,
+        CoreEngineError::InvalidStepIndex
+        | CoreEngineError::MissingInputs
+        | CoreEngineError::FirstStepMustBeSource
+        | CoreEngineError::StepAlreadyTerminal
+        | CoreEngineError::FlowCompleted
+        | CoreEngineError::FlowHasFailed
+        | CoreEngineError::InvalidBranchSource
+        | CoreEngineError::RetryNotAllowed { .. }
+        | CoreEngineError::InvalidTransition { .. }
+        | CoreEngineError::PolicyViolation(_) => ErrorClass::Validation,
     }
 }

@@ -67,8 +67,9 @@ impl Molecule {
                       metadata })
     }
 
-    /// Crea una molécula a partir de las partes ya conocidas (InChIKey, SMILES, InChI).
-    /// Útil para pruebas donde el motor químico (RDKit) no está disponible.
+    /// Crea una molécula a partir de las partes ya conocidas (InChIKey, SMILES,
+    /// InChI). Útil para pruebas donde el motor químico (RDKit) no está
+    /// disponible.
     pub fn from_parts(inchikey: &str, smiles: &str, inchi: &str, metadata: serde_json::Value) -> Result<Self, DomainError> {
         Self::new(inchikey, smiles, inchi, metadata)
     }

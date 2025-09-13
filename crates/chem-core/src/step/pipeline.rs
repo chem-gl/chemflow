@@ -23,17 +23,19 @@ pub struct Pipe<S: TypedStep + StepDefinition + 'static> {
 impl<S: TypedStep + StepDefinition + 'static> Pipe<S> {
     /// Crea una canalización con el primer paso.
     pub fn new(step: S) -> Self {
-        Self { steps: vec![Box::new(step)], _out: PhantomData }
+        Self { steps: vec![Box::new(step)],
+               _out: PhantomData }
     }
 
-    /// Añade un paso verificando `N::Input == S::Output` en tiempo de compilación.
+    /// Añade un paso verificando `N::Input == S::Output` en tiempo de
+    /// compilación.
     pub fn then<N>(mut self, next: N) -> Pipe<N>
-    where
-        N: TypedStep + StepDefinition + 'static,
-        <N as TypedStep>::Input: SameAs<<S as TypedStep>::Output>,
+        where N: TypedStep + StepDefinition + 'static,
+              <N as TypedStep>::Input: SameAs<<S as TypedStep>::Output>
     {
         self.steps.push(Box::new(next));
-        Pipe::<N> { steps: self.steps, _out: PhantomData }
+        Pipe::<N> { steps: self.steps,
+                    _out: PhantomData }
     }
 
     /// Genera una `FlowDefinition` a partir de la lista de pasos.

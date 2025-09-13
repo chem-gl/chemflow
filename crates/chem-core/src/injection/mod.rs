@@ -10,10 +10,10 @@
 //! - `composite`: `CompositeInjector` que aplica una lista de inyectores.
 //! - `merge`: utilitario `merge_json` para merges JSON.
 
-pub mod param_injector;
 pub mod composite;
 pub mod merge;
+pub mod param_injector;
 
-pub use param_injector::ParamInjector;
 pub use composite::CompositeInjector;
 pub use merge::merge_json;
+pub use param_injector::ParamInjector;

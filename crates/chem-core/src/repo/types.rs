@@ -8,12 +8,13 @@
 //! Branching (clon parcial):
 //! - Cuando se crea una rama (`FlowEngine::branch`), el engine copia la
 //!   sub-secuencia de eventos del flujo padre hasta (e incluyendo) el
-//!   `StepFinished` del `from_step_id` y los re-emite en el store bajo el
-//!   nuevo `branch_id`.
-//! - El repositorio asume que el store contiene esa sub-secuencia completa
-//!   y el `load` aplica replay exactamente igual que para flujos "normales".
+//!   `StepFinished` del `from_step_id` y los re-emite en el store bajo el nuevo
+//!   `branch_id`.
+//! - El repositorio asume que el store contiene esa sub-secuencia completa y el
+//!   `load` aplica replay exactamente igual que para flujos "normales".
 //! - Esto garantiza que la `FlowInstance` reconstruida para la rama tenga los
-//!   mismos `StepSlot` y `cursor` que el flujo padre en el punto de bifurcación.
+//!   mismos `StepSlot` y `cursor` que el flujo padre en el punto de
+//!   bifurcación.
 //! - Notas:
 //!   * Artifacts referenciados por hash se resuelven desde un `artifact_store`
 //!     compartido o backend persistente; la copia del log no duplica payloads.
@@ -41,7 +42,8 @@ pub struct StepSlot {
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub attempts: u32, // (Futuro retries) inicial primera ejecución =1
-    /// Conteo acumulado de reintentos agendados/consumidos (Failed→Pending transiciones).
+    /// Conteo acumulado de reintentos agendados/consumidos (Failed→Pending
+    /// transiciones).
     pub retry_count: u32,
 }
 
@@ -74,9 +76,9 @@ impl std::fmt::Debug for FlowDefinition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let step_ids: Vec<String> = self.steps.iter().map(|s| s.id().to_string()).collect();
         f.debug_struct("FlowDefinition")
-            .field("definition_hash", &self.definition_hash)
-            .field("step_ids", &step_ids)
-            .finish()
+         .field("definition_hash", &self.definition_hash)
+         .field("step_ids", &step_ids)
+         .finish()
     }
 }
 
@@ -146,10 +148,13 @@ impl FlowRepository for InMemoryFlowRepository {
                             if *retry_index == expected {
                                 slot.retry_count = *retry_index;
                                 slot.status = StepStatus::Pending;
-                                // Reposicionar cursor si es anterior al índice del step a reintentar
-                                // El cursor se define como el primer Pending; recalcularemos al final.
+                                // Reposicionar cursor si es anterior al índice
+                                // del step a reintentar
+                                // El cursor se define como el primer Pending;
+                                // recalcularemos al final.
                             } else {
-                                // Si el índice no es consistente, ignoramos el evento para mantener invariantes.
+                                // Si el índice no es consistente, ignoramos el evento para mantener
+                                // invariantes.
                                 let _ = idx; // hint to avoid unused warning
                             }
                         }
@@ -168,7 +173,10 @@ impl FlowRepository for InMemoryFlowRepository {
                         }
                     }
                 }
-                FlowEventKind::UserInteractionProvided { step_index, step_id, provided: _, decision_hash: _ } => {
+                FlowEventKind::UserInteractionProvided { step_index,
+                                                         step_id,
+                                                         provided: _,
+                                                         decision_hash: _, } => {
                     // Mark the step as Pending (ready to run) when input provided
                     if let Some(slot) = steps.get_mut(*step_index) {
                         slot.status = crate::step::StepStatus::Pending;

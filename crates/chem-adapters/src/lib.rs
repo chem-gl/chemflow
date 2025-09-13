@@ -2,7 +2,8 @@
 //!
 //! Este crate provee:
 //! - Artifacts tipados neutrales (sin semántica en el core).
-//! - Un trait `DomainArtifactEncoder` para empaquetar tipos de dominio en `Artifact`.
+//! - Un trait `DomainArtifactEncoder` para empaquetar tipos de dominio en
+//!   `Artifact`.
 //! - Steps iniciales: `AcquireMoleculesStep` (Source determinista) y
 //!   `ComputePropertiesStep` (Transform stub) para validar el pipeline
 //!   Acquire→Compute.
@@ -13,18 +14,18 @@
 
 pub mod artifacts;
 pub mod encoder;
-pub mod steps;
 pub mod injectors;
+pub mod steps;
 
 pub use injectors::FamilyHashInjector;
 pub use injectors::PropertiesInjector;
 
-use chem_core::{EventStore, FlowRepository, FlowEngine};
+use chem_core::{EventStore, FlowEngine, FlowRepository};
 
 /// Helper: construct a FlowEngine with the adapters' injectors pre-registered.
 pub fn new_engine_with_adapters<E: EventStore, R: FlowRepository>(event_store: E, repository: R) -> FlowEngine<E, R> {
-	let mut engine = FlowEngine::new_with_stores(event_store, repository);
-	engine.add_injector(Box::new(FamilyHashInjector));
-	engine.add_injector(Box::new(PropertiesInjector));
-	engine
+    let mut engine = FlowEngine::new_with_stores(event_store, repository);
+    engine.add_injector(Box::new(FamilyHashInjector));
+    engine.add_injector(Box::new(PropertiesInjector));
+    engine
 }

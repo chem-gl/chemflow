@@ -68,9 +68,7 @@ pub trait TypedStep {
 // -------------------------------------------------------------
 // Adaptador: cualquier `TypedStep` implementa `StepDefinition` neutro.
 // -------------------------------------------------------------
-impl<T> crate::step::StepDefinition for T
-where
-    T: TypedStep + 'static + std::fmt::Debug,
+impl<T> crate::step::StepDefinition for T where T: TypedStep + 'static + std::fmt::Debug
 {
     fn id(&self) -> &str {
         self.id()
@@ -89,10 +87,10 @@ where
         let params: <Self as TypedStep>::Params = ctx.params_as().unwrap_or_else(|_| self.params_default());
 
         // Decodifica input si existe
-        let typed_in: Option<<Self as TypedStep>::Input> = ctx
-            .input
-            .as_ref()
-            .map(|a| <Self as TypedStep>::Input::from_artifact(a).expect("input artifact decode"));
+        let typed_in: Option<<Self as TypedStep>::Input> =
+            ctx.input
+               .as_ref()
+               .map(|a| <Self as TypedStep>::Input::from_artifact(a).expect("input artifact decode"));
 
         <Self as TypedStep>::run_typed(self, typed_in, params).into_neutral()
     }

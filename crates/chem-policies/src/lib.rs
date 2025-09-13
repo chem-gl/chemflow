@@ -116,31 +116,31 @@ impl PropertySelectionPolicy for MaxScorePolicy {
         };
         let mut sorted = candidates.to_vec();
         sorted.sort_by(|a, b| {
-            let sa = a.score.unwrap_or(0.0);
-            let sb = b.score.unwrap_or(0.0);
-            // Primero score desc
-            match sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Equal => match ms_params.tie_break {
-                    TieRule::ByKeyThenValueHash => {
-                        let ka = a.stable_key();
-                        let kb = b.stable_key();
-                        match ka.cmp(&kb) {
-                            std::cmp::Ordering::Equal => a.value_hash().cmp(&b.value_hash()),
-                            o => o,
-                        }
-                    }
-                },
-                o => o,
-            }
-        });
+                  let sa = a.score.unwrap_or(0.0);
+                  let sb = b.score.unwrap_or(0.0);
+                  // Primero score desc
+                  match sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal) {
+                      std::cmp::Ordering::Equal => match ms_params.tie_break {
+                          TieRule::ByKeyThenValueHash => {
+                              let ka = a.stable_key();
+                              let kb = b.stable_key();
+                              match ka.cmp(&kb) {
+                                  std::cmp::Ordering::Equal => a.value_hash().cmp(&b.value_hash()),
+                                  o => o,
+                              }
+                          }
+                      },
+                      o => o,
+                  }
+              });
 
         let selected = sorted.first().cloned().expect("non-empty candidates");
         let selected_key = selected.stable_key();
-        let ties: Vec<String> = sorted
-            .iter()
-            .filter(|c| (c.score.unwrap_or(0.0) - selected.score.unwrap_or(0.0)).abs() < f64::EPSILON)
-            .map(|c| c.stable_key())
-            .collect();
+        let ties: Vec<String> =
+            sorted.iter()
+                  .filter(|c| (c.score.unwrap_or(0.0) - selected.score.unwrap_or(0.0)).abs() < f64::EPSILON)
+                  .map(|c| c.stable_key())
+                  .collect();
 
         let params_hash = params_hash(params);
         let rationale = Rationale { policy_id: self.id().into(),

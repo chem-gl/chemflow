@@ -116,4 +116,7 @@ fn stress_append_and_list_mix() {
         eprintln!("parity evens={} odds={}", evens, odds);
     }
     assert_eq!(final_events.len(), iters, "Eventos finales deben coincidir con iteraciones");
+    // Prevent native destructor races in test teardown by leaking store (tests
+    // only)
+    std::mem::forget(store);
 }

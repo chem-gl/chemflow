@@ -25,12 +25,9 @@ fn main() {
     }
 
     // Create and run a simple flow
-    let mut engine = FlowEngine::builder(
-        chem_core::event::InMemoryEventStore::default(),
-        chem_core::repo::InMemoryFlowRepository::new()
-    )
-    .first_step(SimpleSource::new())
-    .build();
+    let mut engine = FlowEngine::builder(chem_core::event::InMemoryEventStore::default(),
+                                         chem_core::repo::InMemoryFlowRepository::new()).first_step(SimpleSource::new())
+                                                                                        .build();
 
     match engine.run_to_completion() {
         Ok(flow_id) => {

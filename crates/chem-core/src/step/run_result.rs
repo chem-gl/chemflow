@@ -29,7 +29,14 @@ pub struct StepSignal {
 ///   como eventos auxiliares.
 /// - `Failure` incorpora un `CoreEngineError` con información del fallo.
 pub enum StepRunResult {
-    Success { outputs: Vec<Artifact> },
-    SuccessWithSignals { outputs: Vec<Artifact>, signals: Vec<StepSignal> },
-    Failure { error: CoreEngineError },
+    Success {
+        outputs: Vec<Artifact>,
+    },
+    SuccessWithSignals {
+        outputs: Vec<Artifact>,
+        signals: Vec<StepSignal>,
+    },
+    Failure {
+        error: CoreEngineError,
+    },
 }
