@@ -9,7 +9,6 @@
 use chem_core::errors::CoreEngineError;
 use chem_core::{EventStore, FlowEventKind};
 use chem_persistence::pg::{build_dev_pool_from_env, PgEventStore, PoolProvider};
-use chem_persistence::PersistenceError;
 use uuid::Uuid;
 
 #[test]
@@ -50,6 +49,10 @@ fn test_error_persistence_on_step_failed() {
     } else {
         panic!("details should be present");
     }
+
+    // Avoid running native destructor on pool/provider/store during test teardown
+    std::mem::forget(store);
+    // provider and pool were moved into store; no further action required.
 }
 
 #[test]

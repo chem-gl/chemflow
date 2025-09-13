@@ -5,7 +5,7 @@
 //! - No accede a IO externo; sólo crea estructuras en memoria.
 //! - El motor calculará el hash del artifact a partir del payload canónico.
 
-use chem_core::{typed_artifact, typed_step};
+use chem_core::typed_step;
 
 use crate::artifacts::FamilyArtifact;
 use chem_domain::{DomainError, Molecule, MoleculeFamily};
@@ -53,7 +53,7 @@ typed_step! {
         id: "acquire_molecules",
         output: FamilyArtifact,
         params: AcquireParams,
-        run(me, p) {{
+        run(_me, p) {{
             // Construcción determinista de la familia.
             let fam = build_synthetic_family(&p.dataset).expect("synthetic family build");
             // Convertir a artifact tipado (payload estable). El engine añadirá hash.
@@ -63,3 +63,8 @@ typed_step! {
         }}
     }
 }
+
+// El macro `typed_step!` genera un struct unitario `AcquireMoleculesStep`.
+// El builder del engine requiere que los tipos de step implementen `Debug`.
+// Ahora el macro incluye Debug automáticamente, por lo que no necesitamos
+// implementación manual.

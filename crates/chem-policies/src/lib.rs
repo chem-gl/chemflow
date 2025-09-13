@@ -5,7 +5,6 @@
 
 use chem_core::hashing::{hash_str, to_canonical_json};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 /// Candidato a selección de propiedad.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -166,6 +165,8 @@ pub fn params_hash(params: &SelectionParams) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn cand(key: &str, prop: &str, score: f64) -> PropertyCandidate {

@@ -18,87 +18,64 @@ pub use crate::step::{StepRunResult, StepStatus};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Artifact, ArtifactKind};
-    use crate::step::{StepDefinition, StepKind};
+    use crate::step::StepKind;
     use serde_json::json;
 
-    // Paso fuente de ejemplo
-    #[derive(Debug)]
-    struct SourceStep;
+    // Import macros
+    use crate::typed_artifact;
+    use crate::typed_step;
 
-    impl StepDefinition for SourceStep {
-        fn id(&self) -> &str { "source" }
-        fn base_params(&self) -> serde_json::Value { json!({}) }
-        fn run(&self, _ctx: &crate::model::ExecutionContext) -> crate::step::StepRunResult {
-            crate::step::StepRunResult::Success {
-                outputs: vec![Artifact {
-                    kind: ArtifactKind::GenericJson,
-                    payload: json!({"data": "hello world"}),
-                    hash: String::new(),
-                    metadata: None,
-                }]
+    // --- Helpers de test: pequeña spec JSON para TypedStep -------------------------
+    // Usamos los macros de ayuda para reducir el boilerplate de tests.
+    // Definimos una pequeña spec JSON y tres pasos (Source/Transform/Sink).
+    typed_artifact!(JsonSpec { value: serde_json::Value });
+    typed_step! {
+        source SourceStep {
+            id: "source",
+            output: JsonSpec,
+            params: (),
+            run(self, _p) {
+                JsonSpec { value: json!({ "data": "hello world" }), schema_version: 1 }
             }
         }
-        fn kind(&self) -> StepKind { StepKind::Source }
     }
 
-    // Paso transformador de ejemplo
-    #[derive(Debug)]
-    struct TransformStep;
-
-    impl StepDefinition for TransformStep {
-        fn id(&self) -> &str { "transform" }
-        fn base_params(&self) -> serde_json::Value { json!({}) }
-        fn run(&self, ctx: &crate::model::ExecutionContext) -> crate::step::StepRunResult {
-            if let Some(input) = &ctx.input {
-                let transformed = json!({
-                    "transformed": input.payload["data"],
-                    "processed": true
-                });
-                crate::step::StepRunResult::Success {
-                    outputs: vec![Artifact {
-                        kind: ArtifactKind::GenericJson,
-                        payload: transformed,
-                        hash: String::new(),
-                        metadata: None,
-                    }]
-                }
-            } else {
-                crate::step::StepRunResult::Failure {
-                    error: crate::errors::CoreEngineError::MissingInputs
-                }
+    typed_step! {
+        step TransformStep {
+            id: "transform",
+            kind: StepKind::Transform,
+            input: JsonSpec,
+            output: JsonSpec,
+            params: (),
+            run(_self, inp, _p) {
+                let transformed = json!({ "transformed": inp.value["data"], "processed": true });
+                JsonSpec { value: transformed, schema_version: 1 }
             }
         }
-        fn kind(&self) -> StepKind { StepKind::Transform }
     }
 
-    // Paso sumidero de ejemplo
-    #[derive(Debug)]
-    struct SinkStep;
-
-    impl StepDefinition for SinkStep {
-        fn id(&self) -> &str { "sink" }
-        fn base_params(&self) -> serde_json::Value { json!({}) }
-        fn run(&self, ctx: &crate::model::ExecutionContext) -> crate::step::StepRunResult {
-            if let Some(input) = &ctx.input {
-                println!("Resultado final: {:?}", input.payload);
-                crate::step::StepRunResult::Success { outputs: vec![] }
-            } else {
-                crate::step::StepRunResult::Failure {
-                    error: crate::errors::CoreEngineError::MissingInputs
-                }
+    typed_step! {
+        step SinkStep {
+            id: "sink",
+            kind: StepKind::Sink,
+            input: JsonSpec,
+            output: JsonSpec,
+            params: (),
+            run(_self, inp, _p) {
+                println!("Resultado final: {:?}", inp.value);
+                // retornamos el mismo artifact como output para cumplir la firma
+                JsonSpec { value: inp.value.clone(), schema_version: 1 }
             }
         }
-        fn kind(&self) -> StepKind { StepKind::Sink }
     }
 
     #[test]
     fn test_flow_engine_builder_pattern() {
         // Crear el engine usando el patrón builder
-        let engine = FlowEngine::new()
-            .first_step(SourceStep)
-            .add_step(TransformStep)
-            .add_step(SinkStep)
+        let mut engine = FlowEngine::<crate::event::InMemoryEventStore, crate::repo::InMemoryFlowRepository>::new()
+            .first_step(SourceStep::new())
+            .add_step(TransformStep::new())
+            .add_step(SinkStep::new())
             .build();
 
         // Ejecutar el flujo completo
@@ -121,10 +98,10 @@ mod tests {
 
     #[test]
     fn test_flow_engine_step_by_step() {
-        let mut engine = FlowEngine::new()
-            .first_step(SourceStep)
-            .add_step(TransformStep)
-            .add_step(SinkStep)
+        let mut engine = FlowEngine::<crate::event::InMemoryEventStore, crate::repo::InMemoryFlowRepository>::new()
+            .first_step(SourceStep::new())
+            .add_step(TransformStep::new())
+            .add_step(SinkStep::new())
             .build();
 
         // Ejecutar paso a paso
@@ -141,14 +118,20 @@ mod tests {
 
     #[test]
     fn test_flow_context() {
-        let mut engine = FlowEngine::new()
-            .first_step(SourceStep)
-            .add_step(TransformStep)
-            .add_step(SinkStep)
+        let mut engine = FlowEngine::<crate::event::InMemoryEventStore, crate::repo::InMemoryFlowRepository>::new()
+            .first_step(SourceStep::new())
+            .add_step(TransformStep::new())
+            .add_step(SinkStep::new())
             .build();
 
         let flow_id = engine.ensure_default_flow_id();
-        let definition = engine.default_definition.as_ref().unwrap().clone();
+
+        let steps: Vec<Box<dyn crate::step::StepDefinition>> = vec![
+            Box::new(SourceStep::new()),
+            Box::new(TransformStep::new()),
+            Box::new(SinkStep::new()),
+        ];
+        let definition = crate::repo::build_flow_definition_auto(steps);
 
         let mut ctx = FlowCtx::new(&mut engine, flow_id, &definition);
 

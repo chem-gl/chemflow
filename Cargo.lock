@@ -387,6 +387,7 @@ dependencies = [
  "chem-domain",
  "chem-persistence",
  "dotenvy",
+ "serde",
  "serde_json",
  "uuid",
 ]

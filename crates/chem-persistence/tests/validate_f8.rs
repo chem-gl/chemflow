@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use chem_core::errors::{classify_error, CoreEngineError, ErrorClass};
 use chem_persistence::pg::ErrorRow;
 use chem_persistence::schema::step_execution_errors;

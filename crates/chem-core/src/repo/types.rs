@@ -68,6 +68,18 @@ impl FlowDefinition {
     }
 }
 
+// Manual Debug impl: `steps` contains trait objects which don't implement
+// Debug; expose a compact debug view showing step ids and the definition hash.
+impl std::fmt::Debug for FlowDefinition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let step_ids: Vec<String> = self.steps.iter().map(|s| s.id().to_string()).collect();
+        f.debug_struct("FlowDefinition")
+            .field("definition_hash", &self.definition_hash)
+            .field("step_ids", &step_ids)
+            .finish()
+    }
+}
+
 pub struct InMemoryFlowRepository;
 impl InMemoryFlowRepository {
     pub fn new() -> Self {
@@ -185,7 +197,13 @@ impl FlowRepository for InMemoryFlowRepository {
 pub fn build_flow_definition(step_ids: &[&str], steps: Vec<Box<dyn StepDefinition>>) -> FlowDefinition {
     use crate::hashing::{hash_str, to_canonical_json};
     use serde_json::json;
-    let ids_json = json!(step_ids);
+
+    // Include both step IDs and step definition hashes for uniqueness
+    let step_hashes: Vec<String> = steps.iter().map(|s| s.definition_hash()).collect();
+    let ids_json = json!({
+        "step_ids": step_ids,
+        "step_definition_hashes": step_hashes
+    });
     let canonical = to_canonical_json(&ids_json);
     let definition_hash = hash_str(&canonical);
     FlowDefinition::new(steps, definition_hash)

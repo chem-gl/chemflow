@@ -661,7 +661,7 @@ Todos ordenados por `seq` monotónico. No se reescriben ni borran.
 
 ## 9. Fingerprint / Reproducibilidad (Profundizado)
 
-Composición mínima: sorted(hashes inputs) + canonical_json(params_sin_runtime) + step_kind + internal_version + provider_matrix_sorted + schema_version + deterministic_flag (+ seed).  
+Composición mínima: sorted(hashes inputs) + canonical_json(params_sin_runtime) + step_kind + internal_version + provider_matrix_sorted + schema_version + deterministic_flag (+ seed).
 Uso: (a) caching, (b) comparación de ramas, (c) auditoría divergencias, (d) invalidación selectiva.
 
 ## 10. Branching Determinista
@@ -766,6 +766,10 @@ Requiere `DATABASE_URL`.
 - Error interno/DB: exit 5
 
 ## 12. Base de Datos – Esquema Normalizado
+
+Nota operativa: las migraciones del crate `crates/chem-persistence` se han consolidado en un único archivo canonical `crates/chem-persistence/migrations/0001_init`.
+Este migration contiene la definición completa del esquema (tablas: `event_log`, `workflow_step_artifacts`, `step_execution_errors`, `workflow_branches`) y el CHECK nominal sobre `event_log.event_type` que debe incluir todas las variantes emitidas por el motor (p. ej. `branchcreated`, `userinteractionrequested`, `userinteractionprovided`).
+Si tu base de datos ya existía con migraciones previas, aplica la ALTER segura (drop constraint del CHECK antiguo y crear el nuevo) para evitar fallos a la hora de persistir eventos.
 
 ```mermaid
 erDiagram

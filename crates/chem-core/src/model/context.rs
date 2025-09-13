@@ -31,4 +31,9 @@ impl ExecutionContext {
                     .ok_or_else(|| "ExecutionContext.input is None (primer step o falta de salida previa)".to_string())?;
         TypedArtifact::<T>::decode(a).map_err(|e| format!("TypedArtifact decode error: {:?}", e))
     }
+
+    /// Crea un `ExecutionContext` práctico desde payload y params (helper de tests).
+    pub fn from_payload_and_params(payload: serde_json::Value, params: serde_json::Value) -> Self {
+        Self { input: Some(super::Artifact::new_unhashed(super::ArtifactKind::GenericJson, payload, None)), params }
+    }
 }

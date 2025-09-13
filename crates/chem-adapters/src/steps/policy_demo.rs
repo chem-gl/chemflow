@@ -12,7 +12,7 @@ typed_artifact!(DummyOut { v: i32 });
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct PolicyDemoParams;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PolicyDemoStep;
 impl PolicyDemoStep {
     pub fn new() -> Self {

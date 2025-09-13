@@ -1,16 +1,21 @@
-/// Estado runtime de un Step durante la ejecución del Flow.
+/// Estado de un Step en tiempo de ejecución.
 ///
-/// Transiciones válidas:
-/// - Pending -> Running (al emitir StepStarted)
-/// - Running -> FinishedOk (al emitir StepFinished)
-/// - Running -> Failed (al emitir StepFailed) No se permiten reversiones ni
-///   saltos.
+/// Las transiciones válidas son:
+/// - `Pending` -> `Running`
+/// - `Running` -> `FinishedOk`
+/// - `Running` -> `Failed`
+///
+/// No se permiten reversiones o saltos arbitrarios entre estados.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepStatus {
+    /// El paso está pendiente de ejecución.
     Pending,
+    /// El paso está en ejecución.
     Running,
-    /// El engine espera input humano antes de continuar con el step.
+    /// El paso espera intervención del usuario.
     AwaitingUserInput,
+    /// El paso finalizó correctamente.
     FinishedOk,
+    /// El paso falló.
     Failed,
 }

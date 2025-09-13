@@ -15,6 +15,7 @@ fn pg_inserts_workflow_branches_on_branchcreated() {
     use diesel::RunQueryDsl;
     use serde_json::json;
 
+    #[derive(Debug)]
     struct Src;
     impl StepDefinition for Src {
         fn id(&self) -> &str {
@@ -38,7 +39,7 @@ fn pg_inserts_workflow_branches_on_branchcreated() {
     // Build pool and stores
     let pool = build_dev_pool_from_env().expect("build pool");
     let provider = PoolProvider { pool };
-    let mut store = PgEventStore::new(provider);
+    let store = PgEventStore::new(provider);
     let repo = PgFlowRepository::new();
     let mut engine: FlowEngine<_, _> = FlowEngine::new_with_stores(store, repo);
 
@@ -64,7 +65,7 @@ fn pg_inserts_workflow_branches_on_branchcreated() {
     use diesel::sql_types::BigInt;
     use diesel::QueryableByName;
 
-    let mut conn = engine.event_store.provider.connection().expect("conn");
+    let mut conn = engine.event_store().provider.connection().expect("conn");
     #[derive(QueryableByName, Debug)]
     struct CountRow {
         #[diesel(sql_type = BigInt)]
@@ -78,4 +79,8 @@ fn pg_inserts_workflow_branches_on_branchcreated() {
     let rows: i64 = row.count;
     // Due to differences in test envs, accept 0/1 but assert events exist above
     let _ = rows;
+
+    // Avoid running native teardown code in tests by forgetting the engine
+    // which owns the store/provider. This leaks only in tests.
+    std::mem::forget(engine);
 }

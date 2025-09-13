@@ -3,40 +3,40 @@ use std::marker::PhantomData;
 use super::{StepDefinition, TypedStep};
 use crate::repo::{build_flow_definition_auto, FlowDefinition};
 
-/// Marker trait to assert two types are the same at compile time.
-/// Implemented only for identical types (T: SameAs<T> for all T).
+/// Marker trait usado para forzar igualdad de tipos en tiempo de compilación.
+///
+/// Se implementa únicamente para el mismo tipo: `impl<T> SameAs<T> for T {}`.
 pub trait SameAs<T> {}
 impl<T> SameAs<T> for T {}
 
-/// Typed pipeline builder that enforces at compile time that the next step's
-/// input matches the previous step's output.
+/// Builder tipado para construir pipelines donde la salida de un step
+/// coincide con la entrada del siguiente.
 ///
-/// Usage:
-///   let pipe = Pipe::new(SeedStep).then(SumStep).then(NextStep);
-///   let definition: FlowDefinition = pipe.build();
+/// El builder almacena pasos como `Box<dyn StepDefinition>` internamente pero
+/// fuerza en tiempo de compilación que los tipos adyacentes sean compatibles
+/// mediante `SameAs` y los bounds de `then`.
 pub struct Pipe<S: TypedStep + StepDefinition + 'static> {
     steps: Vec<Box<dyn StepDefinition>>,
     _out: PhantomData<<S as TypedStep>::Output>,
 }
 
 impl<S: TypedStep + StepDefinition + 'static> Pipe<S> {
+    /// Crea una canalización con el primer paso.
     pub fn new(step: S) -> Self {
-        Self { steps: vec![Box::new(step)],
-               _out: PhantomData }
+        Self { steps: vec![Box::new(step)], _out: PhantomData }
     }
 
-    /// Append a new step, enforcing N::Input == S::Output at compile time.
+    /// Añade un paso verificando `N::Input == S::Output` en tiempo de compilación.
     pub fn then<N>(mut self, next: N) -> Pipe<N>
-        where N: TypedStep + StepDefinition + 'static,
-              <N as TypedStep>::Input: SameAs<<S as TypedStep>::Output>
+    where
+        N: TypedStep + StepDefinition + 'static,
+        <N as TypedStep>::Input: SameAs<<S as TypedStep>::Output>,
     {
         self.steps.push(Box::new(next));
-        Pipe::<N> { steps: self.steps,
-                    _out: PhantomData }
+        Pipe::<N> { steps: self.steps, _out: PhantomData }
     }
 
-    /// Build a FlowDefinition from the typed pipeline. The compile-time checks
-    /// provided by `then` ensure adjacency compatibility prior to boxing.
+    /// Genera una `FlowDefinition` a partir de la lista de pasos.
     pub fn build(self) -> FlowDefinition {
         build_flow_definition_auto(self.steps)
     }

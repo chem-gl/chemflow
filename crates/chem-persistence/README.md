@@ -8,6 +8,7 @@ Propósito: lograr durabilidad en Postgres con paridad 1:1 frente al backend en 
   - `PgEventStore`: append-only de `event_log` + inserción opcional de `workflow_step_artifacts` atómica con `StepFinished` + inserción de `step_execution_errors` atómica con `StepFailed` (F8).
   - `PgFlowRepository`: delega el replay a `InMemoryFlowRepository` (paridad exacta).
 - `migrations/` – Migraciones Diesel transaccionales e idempotentes (incluye 0005_step_execution_errors para F8).
+  - Se consolidó el conjunto de migraciones en `0001_init` que contiene el esquema inicial (event_log, workflow_step_artifacts, step_execution_errors, workflow_branches).
 - `config/` – Carga de `DATABASE_URL` y parámetros de pool.
 - `schema/` – Esquema Diesel (event_log, workflow_step_artifacts, step_execution_errors).
 
@@ -64,6 +65,12 @@ Para ejecutar sólo este paquete:
 ```bash
 cargo test -p chem-persistence
 ```
+
+Nota adicional:
+
+- Se añadió el test de integración `tests/branch_and_recover.rs` que valida la creación de ramas (`BranchCreated`), la recuperación de eventos desde Postgres y la continuación de ejecución sobre la rama.
+- El binario principal del repo (`src/main.rs`) incluye una Demo 5 que, si `DATABASE_URL` está configurada, ejecuta un flujo, persiste eventos en Postgres, crea una rama con parámetros divergentes y avanza la rama para demostrar persistencia y branching.
+
 
 ## Operabilidad
 

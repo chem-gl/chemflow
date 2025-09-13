@@ -34,4 +34,13 @@ impl Artifact {
                payload,
                metadata }
     }
+
+    /// Asigna el `hash` calculado y consume el `Artifact` previo.
+    ///
+    /// Útil para que el engine cree el artifact (payload + metadata) y luego
+    /// asigne el hash resultante antes de almacenarlo.
+    pub fn with_hash(mut self, hash: String) -> Self {
+        self.hash = hash;
+        self
+    }
 }

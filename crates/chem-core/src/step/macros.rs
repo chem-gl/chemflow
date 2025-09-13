@@ -1,7 +1,7 @@
 //! Macros utilitarias para reducir boilerplate al definir Artifacts y Steps
 //! tipados.
 //!
-//! Exportadas en la raíz del crate (#[macro_export]) para poder usarlas como:
+//! Exportadas en la raíz del crate para poder usarlas como:
 //!   use chem_core::{typed_artifact, typed_step};
 
 /// Declara un Artifact tipado con derives y ArtifactSpec.
@@ -26,21 +26,6 @@ macro_rules! typed_artifact {
     };
 }
 
-/// Declara un Step tipado (TypedStep) con mínimo boilerplate.
-/// Variantes:
-/// - source (no input): con/sin fields y con/sin ctor
-/// - step (Transform/Sink): con/sin fields
-///
-/// Ejemplos de uso:
-///   typed_step! { source Seed { id: "seed", output: Out, params: (), fields {
-/// seed: String },                   ctor(|s: impl Into<String>| { Self { seed:
-/// s.into() } }),                   run(self, _p) { Out { v: self.seed.len() as
-/// i32, schema_version: 1 } } } }
-///
-///   typed_step! { step Split { id: "split", kind:
-/// $crate::step::StepKind::Transform,                   input: In, output: Out,
-/// params: (),                   run(_self, inp, _p) { Out { v: inp.v + 1,
-/// schema_version: 1 } } } }
 #[macro_export]
 macro_rules! typed_step {
     // ---------------- Source con fields y ctor custom ----------------
@@ -54,9 +39,9 @@ macro_rules! typed_step {
             , run($self_ident:ident, $p_ident:ident) $body:block
         }
     ) => {
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $name { $(pub $fname: $fty),+ }
-    impl $name { pub fn new($($ctor_args)*) -> Self { $ctor } }
+        impl $name { pub fn new($($ctor_args)*) -> Self { $ctor } }
         impl $crate::step::TypedStep for $name {
             type Params = $params;
             type Input = $out;   // ignorado (Source)
@@ -82,7 +67,7 @@ macro_rules! typed_step {
             , run($self_ident:ident, $p_ident:ident) $body:block
         }
     ) => {
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $name { $(pub $fname: $fty),+ }
         impl $name { pub fn new($($fname : $fty),+) -> Self { Self { $($fname),+ } } }
         impl $crate::step::TypedStep for $name {
@@ -109,7 +94,7 @@ macro_rules! typed_step {
             run($self_ident:ident, $p_ident:ident) $body:block
         }
     ) => {
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $name;
         impl $name { pub fn new() -> Self { Self } }
         impl $crate::step::TypedStep for $name {
@@ -120,7 +105,7 @@ macro_rules! typed_step {
             fn kind(&self) -> $crate::step::StepKind { $crate::step::StepKind::Source }
             fn params_default(&self) -> Self::Params { <Self::Params as Default>::default() }
             fn run_typed(&self, _input: Option<Self::Input>, $p_ident: Self::Params) -> $crate::step::StepRunResultTyped<Self::Output> {
-                let $self_ident = self;
+                let _step_self = self;
                 let out: Self::Output = { $body };
                 $crate::step::StepRunResultTyped::Success { outputs: vec![out] }
             }
@@ -140,9 +125,9 @@ macro_rules! typed_step {
             , run($self_ident:ident, $inp_ident:ident, $p_ident:ident) $body:block
         }
     ) => {
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $name { $(pub $fname: $fty),+ }
-    impl $name { pub fn new($($ctor_args)*) -> Self { $ctor } }
+        impl $name { pub fn new($($ctor_args)*) -> Self { $ctor } }
         impl $crate::step::TypedStep for $name {
             type Params = $params;
             type Input = $inp;
@@ -171,7 +156,7 @@ macro_rules! typed_step {
             , run($self_ident:ident, $inp_ident:ident, $p_ident:ident) $body:block
         }
     ) => {
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $name { $(pub $fname: $fty),+ }
         impl $name { pub fn new($($fname : $fty),+) -> Self { Self { $($fname),+ } } }
         impl $crate::step::TypedStep for $name {
@@ -201,7 +186,7 @@ macro_rules! typed_step {
             run($self_ident:ident, $inp_ident:ident, $p_ident:ident) $body:block
         }
     ) => {
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $name;
         impl $name { pub fn new() -> Self { Self } }
         impl $crate::step::TypedStep for $name {
@@ -212,7 +197,7 @@ macro_rules! typed_step {
             fn kind(&self) -> $crate::step::StepKind { $kind }
             fn params_default(&self) -> Self::Params { <Self::Params as Default>::default() }
             fn run_typed(&self, input: Option<Self::Input>, $p_ident: Self::Params) -> $crate::step::StepRunResultTyped<Self::Output> {
-                let $self_ident = self;
+                let _step_self = self;
                 let $inp_ident: Self::Input = input.expect(concat!("Step ", $id, " requiere input"));
                 let out: Self::Output = { $body };
                 $crate::step::StepRunResultTyped::Success { outputs: vec![out] }
