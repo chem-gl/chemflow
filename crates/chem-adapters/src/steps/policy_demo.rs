@@ -20,6 +20,12 @@ impl PolicyDemoStep {
     }
 }
 
+impl Default for PolicyDemoStep {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypedStep for PolicyDemoStep {
     type Params = PolicyDemoParams;
     type Input = DummyIn;

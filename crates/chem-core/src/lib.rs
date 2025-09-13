@@ -223,7 +223,8 @@ mod tests {
         builder.append_event(FlowEventKind::StepFinished { step_index: 1,
                                                            step_id: "a".to_string(),
                                                            outputs: vec![new_hash.clone()],
-                                                           fingerprint: fp.clone() });
+                                                           fingerprint: fp.clone(),
+                                                           outputs_payloads: None });
 
         // Ejecutar la rama hasta completarla
         let branch_id = builder.run_to_completion().expect("branch should run");

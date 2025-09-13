@@ -58,3 +58,9 @@ impl CompositeInjector {
         accumulated
     }
 }
+
+impl Default for CompositeInjector {
+    fn default() -> Self {
+        Self::new()
+    }
+}

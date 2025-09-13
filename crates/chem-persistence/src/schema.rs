@@ -37,4 +37,17 @@ diesel::table! {
     }
 }
 
-diesel::allow_tables_to_appear_in_same_query!(event_log, workflow_step_artifacts, step_execution_errors,);
+diesel::table! {
+    workflow_branches (branch_id) {
+        branch_id -> Uuid,
+        root_flow_id -> Uuid,
+        parent_flow_id -> Nullable<Uuid>,
+        created_from_step_id -> Text,
+        divergence_params_hash -> Nullable<Text>,
+        created_at -> Timestamptz,
+    name -> Nullable<Text>,
+    metadata -> Nullable<Jsonb>,
+    }
+}
+
+diesel::allow_tables_to_appear_in_same_query!(event_log, workflow_step_artifacts, step_execution_errors, workflow_branches,);

@@ -142,7 +142,7 @@ fn main() {
     println!("   Molécula 2: {} (InChI: {})", molecule2, molecule2.inchi());
 
     // F4: uso del encoder dominio → artifact neutral (molecule y family)
-    let encoder = SimpleDomainEncoder::default();
+    let encoder = SimpleDomainEncoder;
     let mol_art = encoder.encode_molecule(&molecule1);
     println!("   Artifact molécula: kind={:?}, hash={}", mol_art.kind, mol_art.hash);
 
@@ -282,8 +282,7 @@ fn main() {
     println!("\n🎉 ¡Demo completado exitosamente!");
     println!("==================================");
 
-    // -------------------- DEMO 5: Persistencia en Postgres y Branching
-    // --------------------
+
 
     if std::env::var("DATABASE_URL").is_ok() {
         println!("\n🗄️ Demo 5: Persistencia en Postgres y branching (si DATABASE_URL está presente)");

@@ -166,24 +166,20 @@ impl FlowRepository for InMemoryFlowRepository {
                 FlowEventKind::UserInteractionRequested { step_index, step_id, .. } => {
                     if let Some(slot) = steps.get_mut(*step_index) {
                         slot.status = crate::step::StepStatus::AwaitingUserInput;
-                    } else {
-                        // fallback: try to find by id
-                        if let Some((_, slot)) = steps.iter_mut().enumerate().find(|(_, s)| &s.step_id == step_id) {
-                            slot.status = crate::step::StepStatus::AwaitingUserInput;
-                        }
+                    } else if let Some((_, slot)) = steps.iter_mut().enumerate().find(|(_, s)| &s.step_id == step_id) {
+                        // fallback: buscar por id cuando el index no existe
+                        slot.status = crate::step::StepStatus::AwaitingUserInput;
                     }
                 }
                 FlowEventKind::UserInteractionProvided { step_index,
                                                          step_id,
                                                          provided: _,
                                                          decision_hash: _, } => {
-                    // Mark the step as Pending (ready to run) when input provided
+                    // Marcar el step como Pending cuando se provee la entrada
                     if let Some(slot) = steps.get_mut(*step_index) {
                         slot.status = crate::step::StepStatus::Pending;
-                    } else {
-                        if let Some((_, slot)) = steps.iter_mut().enumerate().find(|(_, s)| &s.step_id == step_id) {
-                            slot.status = crate::step::StepStatus::Pending;
-                        }
+                    } else if let Some((_, slot)) = steps.iter_mut().enumerate().find(|(_, s)| &s.step_id == step_id) {
+                        slot.status = crate::step::StepStatus::Pending;
                     }
                 }
                 FlowEventKind::PropertyPreferenceAssigned { .. } => {}

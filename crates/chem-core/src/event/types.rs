@@ -12,6 +12,15 @@ use uuid::Uuid;
 
 use crate::errors::CoreEngineError;
 
+/// Artifacts attached a un evento cuando se persisten payloads completos.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventArtifact {
+    pub hash: String,
+    pub kind: String,
+    pub payload: serde_json::Value,
+    pub metadata: Option<serde_json::Value>,
+}
+
 /// Tipos de eventos soportados en F2 (esqueleto).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FlowEventKind {
@@ -26,6 +35,10 @@ pub enum FlowEventKind {
         step_id: String,
         outputs: Vec<String>,
         fingerprint: String,
+        /// Opcional: payloads completos de los outputs (útil para persistir
+        /// en la base de datos sin depender de otro store). Si `None`, solo
+        /// se conoce la lista de hashes.
+        outputs_payloads: Option<Vec<EventArtifact>>,
     },
     /// Un step terminó con error terminal. El flujo no continúa
     /// (stop-on-failure).

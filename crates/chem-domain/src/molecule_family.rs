@@ -155,6 +155,11 @@ impl MoleculeFamily {
         self.molecules.len()
     }
 
+    /// Indica si la familia está vacía
+    pub fn is_empty(&self) -> bool {
+        self.molecules.is_empty()
+    }
+
     /// Indica si la familia contiene una molécula con el InChIKey dado
     pub fn contains(&self, inchikey: &str) -> bool {
         self.molecules.iter().any(|m| m.inchikey() == inchikey)

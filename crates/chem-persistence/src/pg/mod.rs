@@ -126,6 +126,20 @@ pub struct NewArtifactRow<'a> {
     pub produced_in_seq: i64,
 }
 
+/// Insertable para la tabla `workflow_branches` (F9 metadata mínima).
+#[derive(Insertable, Debug)]
+#[diesel(table_name = crate::schema::workflow_branches)]
+pub struct NewBranchRow {
+    pub branch_id: uuid::Uuid,
+    pub root_flow_id: uuid::Uuid,
+    pub parent_flow_id: Option<uuid::Uuid>,
+    pub created_from_step_id: String,
+    pub divergence_params_hash: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub name: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
 /// Row mapeada de la tabla `event_log` (shape mínima anticipada).
 /// Fila mapeada de la tabla `event_log` para lecturas.
 ///
@@ -281,85 +295,112 @@ impl<P: ConnectionProvider> EventStore for PgEventStore<P> {
         // Transacción atómica: inserción de evento y (si aplica) artifacts.
         // - Si falla cualquiera de las inserciones, se revierte todo.
         // - Se usa retry/backoff para errores transitorios.
-        let inserted: (i64, DateTime<Utc>) = with_retry(|| {
-            let mut conn = self.provider.connection()?;
-            conn.build_transaction()
-                .read_write()
-                .run(|tx_conn| {
-                    // Paso 1: insertar el evento
-                    let (seq, ts): (i64, DateTime<Utc>) = diesel::insert_into(event_log::table)
-                        .values(NewEventRow { flow_id: &flow_id, event_type, payload: &payload })
-                        .returning((event_log::seq, event_log::ts))
-                        .get_result(tx_conn)?;
+        let inserted: (i64, DateTime<Utc>) =
+            with_retry(|| {
+                let mut conn = self.provider.connection()?;
+                conn.build_transaction()
+                    .read_write()
+                    .run(|tx_conn| {
+                        // Paso 1: insertar el evento
+                        let (seq, ts): (i64, DateTime<Utc>) =
+                            diesel::insert_into(event_log::table).values(NewEventRow { flow_id: &flow_id,
+                                                                                       event_type,
+                                                                                       payload: &payload })
+                                                                 .returning((event_log::seq, event_log::ts))
+                                                                 .get_result(tx_conn)?;
 
-                    // Paso 2: insertar artifacts asociados (si feature activo)
-                    #[cfg(not(feature = "no-artifact-insert"))]
-                    {
-                        if let FlowEventKind::StepFinished { outputs, .. } = &kind {
-                            if !outputs.is_empty() {
-                                for h in outputs {
-                                    if h.len() != 64 {
-                                        debug!("skip artifact hash len!=64 hash={h}");
-                                        continue;
+                        // Paso 2: insertar artifacts asociados (si feature activo)
+                        #[cfg(not(feature = "no-artifact-insert"))]
+                        {
+                            if let FlowEventKind::StepFinished { outputs,
+                                                                 outputs_payloads,
+                                                                 .. } = &kind
+                            {
+                                // Si se entregaron payloads completos, persistirlos.
+                                if let Some(payloads) = outputs_payloads {
+                                    for art in payloads {
+                                        let h = &art.hash;
+                                        if h.len() != 64 {
+                                            debug!("skip artifact hash len!=64 hash={h}");
+                                            continue;
+                                        }
+                                        let row = NewArtifactRow { artifact_hash: h,
+                                                                   kind: &art.kind,
+                                                                   payload: &art.payload,
+                                                                   metadata: art.metadata.as_ref(),
+                                                                   produced_in_seq: seq };
+                                        diesel::insert_into(workflow_step_artifacts::table).values(&row)
+                                                                                           .on_conflict_do_nothing()
+                                                                                           .execute(tx_conn)?;
                                     }
-                                    let null = Value::Null; // snapshot de payload/metadata diferido en F5
-                                    let row = NewArtifactRow { artifact_hash: h,
-                                                               kind: "unknown",
-                                                               payload: &null,
-                                                               metadata: None,
-                                                               produced_in_seq: seq };
-                                    // Dedupe por PK (artifact_hash)
-                                    diesel::insert_into(workflow_step_artifacts::table)
-                                        .values(&row)
-                                        .on_conflict_do_nothing()
-                                        .execute(tx_conn)?;
+                                } else if !outputs.is_empty() {
+                                    for h in outputs {
+                                        if h.len() != 64 {
+                                            debug!("skip artifact hash len!=64 hash={h}");
+                                            continue;
+                                        }
+                                        let null = Value::Null; // snapshot de payload/metadata diferido en F5
+                                        let row = NewArtifactRow { artifact_hash: h,
+                                                                   kind: "unknown",
+                                                                   payload: &null,
+                                                                   metadata: None,
+                                                                   produced_in_seq: seq };
+                                        diesel::insert_into(workflow_step_artifacts::table).values(&row)
+                                                                                           .on_conflict_do_nothing()
+                                                                                           .execute(tx_conn)?;
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    // Paso 3: insertar error si es StepFailed (F8)
-                    // Persiste detalles del error para auditoría granular y reconstrucción de timeline.
-                    // attempt_number simplificado a 1; futuro: contar StepStarted previos.
-                    if let FlowEventKind::StepFailed { step_id, error, .. } = &kind {
-                        let error_class = match classify_error(error) {
-                            ErrorClass::Runtime => "runtime",
-                            ErrorClass::Validation => "validation",
-                            ErrorClass::Transient => "transient",
-                            ErrorClass::Permanent => "permanent",
-                        };
-                        let details = serde_json::to_value(error).ok();
-                        let attempt_number = 1; // Simplificación: primer intento; en producción, calcular basado en eventos previos
-                        let error_row = NewErrorRow {
-                            flow_id: &flow_id,
-                            step_id,
-                            attempt_number,
-                            error_class,
-                            details: details.as_ref(),
-                        };
-                        diesel::insert_into(step_execution_errors::table)
-                            .values(&error_row)
-                            .execute(tx_conn)?;
-                    }
+                        // Paso 3: insertar error si es StepFailed (F8)
+                        // Persiste detalles del error para auditoría granular y reconstrucción de
+                        // timeline. attempt_number simplificado a 1; futuro:
+                        // contar StepStarted previos.
+                        if let FlowEventKind::StepFailed { step_id, error, .. } = &kind {
+                            let error_class = match classify_error(error) {
+                                ErrorClass::Runtime => "runtime",
+                                ErrorClass::Validation => "validation",
+                                ErrorClass::Transient => "transient",
+                                ErrorClass::Permanent => "permanent",
+                            };
+                            let details = serde_json::to_value(error).ok();
+                            let attempt_number = 1; // Simplificación: primer intento; en producción, calcular basado en eventos
+                                                    // previos
+                            let error_row = NewErrorRow { flow_id: &flow_id,
+                                                          step_id,
+                                                          attempt_number,
+                                                          error_class,
+                                                          details: details.as_ref() };
+                            diesel::insert_into(step_execution_errors::table).values(&error_row)
+                                                                             .execute(tx_conn)?;
+                        }
 
-                    // Paso 4: insertar metadata de rama si es BranchCreated (F9)
-                    if let FlowEventKind::BranchCreated { branch_id, parent_flow_id, root_flow_id, created_from_step_id, divergence_params_hash } = &kind {
-                        // Tabla workflow_branches (branch_id PK)
-                        // Insert minimal row; metadata puede incluir nombre y JSON adicional más tarde.
-                        diesel::sql_query("INSERT INTO workflow_branches (branch_id, root_flow_id, parent_flow_id, created_from_step_id, divergence_params_hash, created_at) VALUES ($1, $2, $3, $4, $5, now()) ON CONFLICT DO NOTHING")
-                            .bind::<diesel::sql_types::Uuid, _>(*branch_id)
-                            .bind::<diesel::sql_types::Uuid, _>(*root_flow_id)
-                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(Some(*parent_flow_id))
-                            .bind::<diesel::sql_types::Text, _>(created_from_step_id.clone())
-                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(divergence_params_hash.clone())
-                            .execute(tx_conn)?;
-                    }
+                        // Paso 4: insertar metadata de rama si es BranchCreated (F9)
+                        if let FlowEventKind::BranchCreated { branch_id,
+                                                              parent_flow_id,
+                                                              root_flow_id,
+                                                              created_from_step_id,
+                                                              divergence_params_hash, } = &kind
+                        {
+                            // Insert via Diesel DSL into workflow_branches table
+                            let new_branch = NewBranchRow { branch_id: *branch_id,
+                                                            root_flow_id: *root_flow_id,
+                                                            parent_flow_id: Some(*parent_flow_id),
+                                                            created_from_step_id: created_from_step_id.clone(),
+                                                            divergence_params_hash: divergence_params_hash.clone(),
+                                                            created_at: chrono::Utc::now(),
+                                                            name: None,
+                                                            metadata: None };
+                            diesel::insert_into(crate::schema::workflow_branches::table).values(&new_branch)
+                                                                                        .on_conflict_do_nothing()
+                                                                                        .execute(tx_conn)?;
+                        }
 
-                    Ok::<(i64, DateTime<Utc>), diesel::result::Error>((seq, ts))
-                })
-                .map_err(PersistenceError::from)
-        })
-        .expect("insert event (with artifacts)");
+                        Ok::<(i64, DateTime<Utc>), diesel::result::Error>((seq, ts))
+                    })
+                    .map_err(PersistenceError::from)
+            }).expect("insert event (with artifacts)");
 
         let ev = FlowEvent { seq: inserted.0 as u64,
                              flow_id,

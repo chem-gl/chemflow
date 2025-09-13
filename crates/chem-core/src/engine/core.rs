@@ -55,6 +55,7 @@ impl<E, R> FlowEngine<E, R>
 
     /// Crea un builder con stores en memoira (útil para tests y ejemplos).
     #[inline]
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> EngineBuilderInit<crate::event::InMemoryEventStore, crate::repo::InMemoryFlowRepository> {
         EngineBuilderInit { event_store: crate::event::InMemoryEventStore::default(),
                             repository: crate::repo::InMemoryFlowRepository::new() }
@@ -281,7 +282,7 @@ impl<E, R> FlowEngine<E, R>
         } else {
             instance.steps
                     .get(cursor - 1)
-                    .and_then(|s| s.outputs.get(0))
+                    .and_then(|s| s.outputs.first())
                     .and_then(|h| self.artifact_store.get(h).cloned())
         };
 
@@ -319,7 +320,8 @@ impl<E, R> FlowEngine<E, R>
                                                      FlowEventKind::StepFinished { step_index: cursor,
                                                                                    step_id: step_def.id().to_string(),
                                                                                    outputs: output_hashes.clone(),
-                                                                                   fingerprint: fp.clone() });
+                                                                                   fingerprint: fp.clone(),
+                                                                                   outputs_payloads: None });
 
         if cursor + 1 == definition.len() {
             self.complete_flow(flow_id, definition);
@@ -351,7 +353,8 @@ impl<E, R> FlowEngine<E, R>
                                                      FlowEventKind::StepFinished { step_index: cursor,
                                                                                    step_id: step_def.id().to_string(),
                                                                                    outputs: output_hashes.clone(),
-                                                                                   fingerprint: fp.clone() });
+                                                                                   fingerprint: fp.clone(),
+                                                                                   outputs_payloads: None });
 
         if cursor + 1 == definition.len() {
             self.complete_flow(flow_id, definition);
@@ -422,6 +425,7 @@ impl<E, R> FlowEngine<E, R>
     // ------------------------------------------------------------
 
     /// Avanza un paso en el flujo por defecto.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<(), CoreEngineError> {
         let flow_id = self.ensure_default_flow_id();
         // Tomamos temporalmente la definición por defecto para evitar borrows
@@ -546,7 +550,7 @@ impl<E, R> FlowEngine<E, R>
         // Si la definición del branch coincide con la del padre (mismo hash)
         // copiamos los eventos relevantes preservando el orden original.
         let same_definition = parent_def_hash_opt.as_deref()
-                                                 .map_or(false, |h| h == definition.definition_hash);
+                                                 .is_some_and(|h| h == definition.definition_hash);
         if same_definition {
             // Localizar el índice del FlowInitialized del padre para comenzar
             // a copiar justo después de él (evita duplicarlo).
@@ -623,7 +627,7 @@ impl<E, R> FlowEngine<E, R>
         // Si la definición del branch coincide con la del padre copiamos eventos
         // relevantes
         let same_definition = parent_def_hash_opt.as_deref()
-                                                 .map_or(false, |h| h == definition.definition_hash);
+                                                 .is_some_and(|h| h == definition.definition_hash);
         if same_definition {
             let init_idx = events.iter()
                                  .position(|e| matches!(e.kind, FlowEventKind::FlowInitialized { .. }))
