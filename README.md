@@ -1,58 +1,67 @@
-# ChemFlow (Rust)
+# ChemFlow
 
-Plataforma experimental para orquestar flujos (workflows) de generación y cálculo de propiedades de familias de moléculas con trazabilidad y branching.
+Resumen
+-------
+ChemFlow es un motor determinista de workflows orientado a pipelines de pasos (steps). El proyecto está organizado en crates Rust separados: `chem-core` (motor y modelos), `chem-domain` (tipos del dominio químico), `chem-persistence` (persistencia Postgres/Diesel), `chem-adapters` (adapters dominio↔core) y utilidades.
 
-## Objetivos
+Estado actual
+------------
+- `chem-core`: motor lineal determinista, event store trait y `InMemoryEventStore`.
+- `chem-persistence`: implementación Postgres con Diesel (`PgEventStore`, `PgFlowRepository`) y migraciones.
+- `chem-adapters`: pasos de ejemplo (Acquire/Compute) y encoders dominio→artifact.
 
-- Adquirir familias de moléculas mediante proveedores (`MoleculeProvider`).
-- Calcular propiedades sobre familias completas (`PropertiesProvider`).
-- Generar datos agregados opcionales (`DataProvider`).
-- Mantener trazabilidad completa: parámetros efectivos, proveedor, versión, timestamps y linaje (root / parent / branch).
-- Soportar branching: ejecutar caminos alternativos a partir de un step previo conservando un `root_execution_id` común.
+Quick start
+-----------
+Prerequisitos:
+- Rust toolchain (stable) y `cargo`.
+- Para pruebas con Postgres: tener `DATABASE_URL` apuntando a una instancia Postgres (opcional para tests in-memory).
 
-## Conceptos Clave
-
-TODO implementar conceptos clave aquí.
-
-## Estructura Resumida
-
-## Requisitos
-
-- Rust (stable) ≥ 1.78
-- (Opcional) PostgreSQL 15+ si quieres persistencia real.
-- Docker + Docker Compose (para levantar Postgres rápidamente):
+Ejecutar tests rápidos (sin Postgres):
 
 ```bash
-docker compose -f postgress-docker/compose.yaml up -d
+cargo test -p chem-core
 ```
 
-## Configuración de Entorno
-
-Crear un archivo `.env` (o exportar variables):
-
-## Migraciones
-
-## Ejecución de Ejemplo
-
-...
-
-## Comandos Rápidos
-
-### Comandos Rápidos CLI
+Ejecutar un test de integración que usa Postgres (si tienes DB):
 
 ```bash
-# Formatear
-cargo fmt
-# Compilar y testear
-cargo test
-# Ejecutar ejemplo
-cargo run
+export DATABASE_URL='postgres://admin:admin123@localhost:5432/mydatabase?gssencmode=disable'
+RUST_TEST_THREADS=1 cargo test -p chem-persistence --test branch_and_recover -- --nocapture
 ```
 
-## Contribuyendo
+Nota: En algunos entornos la combinación de `libpq` y `krb5` puede provocar abortos en el teardown de tests. Si eso ocurre, un workaround temporal en los tests de integración es usar `std::mem::forget(...)` para evitar ejecutar destructores nativos durante teardown. También se puede desactivar la negociación GSSAPI con `?gssencmode=disable` en la `DATABASE_URL`.
 
-Lee [CONTRIBUTING.md](CONTRIBUTING.md) para detalles sobre cómo contribuir al proyecto.
+#sym:main — ejemplo de interacción humana
+----------------------------------------
+En el motor los eventos de interacción humana (por ejemplo `UserInteractionRequested` y `UserInteractionProvided`) se representan como variantes de `FlowEventKind` y se insertan en el `EventStore`. Un ejemplo de cómo se podría inyectar una acción (p.ej. respuesta de usuario) sería:
 
-## Licencia
+```rust
+// Pseudocódigo de ejemplo (no compilable directamente aquí)
+use chem_core::{EventStore, FlowEventKind};
+use uuid::Uuid;
+let mut store = /* un EventStore, p.ej. PgEventStore o InMemoryEventStore */;
+let flow_id = Uuid::parse_str("...").unwrap();
 
-Este proyecto está bajo la Licencia MIT. Consulta el archivo LICENSE para más detalles.
+// Cuando se recibe la acción del usuario, la representamos como evento
+let user_action = FlowEventKind::UserInteractionProvided {
+    interaction_id: "human_gate_1".to_string(),
+    flow_id: flow_id,
+    payload: serde_json::json!({"choice": "approve", "comment": "ok"}),
+};
+
+store.append_kind(flow_id, user_action);
+
+// El engine o los componentes de replay leerán ese evento y continuarán
+```
+
+Cómo contribuir
+---------------
+- Ejecuta `cargo test --all` y corrige fallos.
+- Mantén las migraciones en `crates/chem-persistence/migrations`.
+
+Licencia y notas
+-----------------
+Proyecto educativo / experimental. Consulta los archivos `Cargo.toml` de cada crate para dependencias y versiones.
+
+---
+Archivo creado automáticamente por la herramienta de mantenimiento del repo.
